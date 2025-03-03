@@ -59,4 +59,5 @@ class DefaultFirebaseOptions {
     projectId: 'flutter-chat-mvp-e2c09',
     storageBucket: 'flutter-chat-mvp-e2c09.firebasestorage.app',
   );
+
 }

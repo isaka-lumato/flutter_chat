@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "com.example.flutter_chat_mvp"
     compileSdk = flutter.compileSdkVersion
-ndkVersion = "27.0.12077973"  // <-- REPLACE the entire line with this
+        ndkVersion = "27.0.12077973"
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -23,7 +23,7 @@ ndkVersion = "27.0.12077973"  // <-- REPLACE the entire line with this
         applicationId = "com.example.flutter_chat_mvp"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdkVersion(23)
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
