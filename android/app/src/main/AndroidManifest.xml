@@ -1,4 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Storage permissions for Android 12 and below -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- Media permissions for Android 13+ -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <!-- Audio permissions for voice messages -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Add compatibility for photo picker for Android 13+ -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <application
         android:label="flutter_chat_mvp"
         android:name="${applicationName}"

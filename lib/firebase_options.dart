@@ -57,7 +57,7 @@ class DefaultFirebaseOptions {
     appId: '1:267263407175:android:afb3be7f606121ba4c6d62',
     messagingSenderId: '267263407175',
     projectId: 'flutter-chat-mvp-e2c09',
-    storageBucket: 'flutter-chat-mvp-e2c09.firebasestorage.app',
+    storageBucket: 'flutter-chat-mvp-e2c09.appspot.com',
   );
 
 }
