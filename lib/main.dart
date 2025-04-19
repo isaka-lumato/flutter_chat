@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:flutter_chat_mvp/pages/login_page.dart';
 import 'package:flutter_chat_mvp/pages/home_page.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -31,6 +32,17 @@ Future<void> main() async {
     }
     
     print('Firebase Storage configured successfully');
+
+    // Initialize Firebase App Check in debug mode
+    try {
+      await FirebaseAppCheck.instance.activate(
+        androidProvider: AndroidProvider.debug,
+        appleProvider: AppleProvider.debug,
+      );
+      print('Firebase App Check activated');
+    } catch (appCheckError) {
+      print('Firebase App Check activation failed: $appCheckError');
+    }
   } catch (e) {
     print('Error initializing Firebase: $e');
   }

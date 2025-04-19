@@ -12,6 +12,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:http/http.dart' as http;
+import 'package:mime/mime.dart';
 
 class ChatPage extends StatefulWidget {
   final String conversationId;
@@ -201,29 +203,34 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
       
-      // Read the audio file
       final File file = File(filePath);
-      final Uint8List audioBytes = await file.readAsBytes();
-      
-      // Convert to base64 (temporary solution until Firebase Storage is set up)
-      final String base64Audio = base64Encode(audioBytes);
-      
-      // Send the voice message
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        throw Exception('User not logged in');
+      }
+
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.m4a';
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('chat_audio/${widget.conversationId}/$fileName');
+      final uploadTask = ref.putFile(file, SettableMetadata(contentType: 'audio/m4a'));
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+
       await _messages.add({
         'sender': currentUser.uid,
         'timestamp': FieldValue.serverTimestamp(),
         'text': '(Voice message)',
-        'base64Audio': base64Audio,
+        'audioUrl': downloadUrl,
+        'audioName': fileName,
         'audioDuration': _recordingDuration,
+        'conversationId': widget.conversationId,
+        'reactions': {},
       });
-      
-      // Update the conversation with the last message
       await _conversation.update({
         'lastMessage': '(Voice message)',
         'lastMessageTimestamp': FieldValue.serverTimestamp(),
       });
-      
-      // Delete the temporary file
       await file.delete();
       
     } catch (e) {
@@ -237,7 +244,7 @@ class _ChatPageState extends State<ChatPage> {
   }
   
   // Audio playback methods
-  Future<void> _playVoiceMessage(String messageId, String base64Audio) async {
+  Future<void> _playVoiceMessage(String messageId, String audioUrl) async {
     try {
       // Check if we already have a player for this message
       if (!_audioPlayers.containsKey(messageId)) {
@@ -256,22 +263,12 @@ class _ChatPageState extends State<ChatPage> {
         return;
       }
       
-      // Decode the base64 audio
-      final Uint8List audioBytes = base64Decode(base64Audio);
-      
-      // Create a temporary file
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/temp_voice_$messageId.aac');
-      await tempFile.writeAsBytes(audioBytes);
-      
       // Play the audio
       await player.startPlayer(
-        fromURI: tempFile.path,
+        fromURI: audioUrl,
         codec: Codec.aacADTS,
         whenFinished: () {
           setState(() {});
-          // Clean up temp file after playback
-          tempFile.delete().catchError((e) => print('Error deleting temp file: $e'));
         },
       );
       
@@ -391,18 +388,18 @@ class _ChatPageState extends State<ChatPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (messageData['base64Image'] != null)
+                      if (messageData['imageUrl'] != null)
                         GestureDetector(
-                          onTap: () => _showFullScreenImage(messageData['base64Image']),
+                          onTap: () => _showFullScreenImage(messageData['imageUrl']),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.memory(
-                              base64Decode(messageData['base64Image']),
+                            child: Image.network(
+                              messageData['imageUrl'],
                               fit: BoxFit.cover,
                               width: double.infinity,
                               height: 200,
                               errorBuilder: (context, error, stackTrace) {
-                                print('DEBUG: Failed to render image: $error');
+                                print('DEBUG: Failed to load image: $error');
                                 return Container(
                                   height: 200,
                                   width: double.infinity,
@@ -428,7 +425,7 @@ class _ChatPageState extends State<ChatPage> {
                             color: isMe ? Colors.white : null,
                           ),
                         ),
-                      if (messageData['base64Audio'] != null)
+                      if (messageData['audioUrl'] != null)
                         Container(
                           margin: const EdgeInsets.only(top: 4),
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -441,12 +438,14 @@ class _ChatPageState extends State<ChatPage> {
                             children: [
                               IconButton(
                                 icon: Icon(
-                                  _audioPlayers.containsKey(messageData['id']) && 
-                                  _audioPlayers[messageData['id']]!.isPlaying ? 
-                                  Icons.pause : Icons.play_arrow,
-                                  color: Theme.of(context).primaryColor,
+                                  _audioPlayers.containsKey(messageData['id']) &&
+                                          _audioPlayers[messageData['id']]!.isPlaying
+                                      ? Icons.pause
+                                      : Icons.play_arrow,
                                 ),
-                                onPressed: () => _playVoiceMessage(messageData['id'], messageData['base64Audio']),
+                                color: Theme.of(context).primaryColor,
+                                onPressed: () => _playVoiceMessage(
+                                    messageData['id'], messageData['audioUrl']),
                               ),
                               Expanded(
                                 child: Container(
@@ -733,7 +732,6 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  // Temporary base64 image storage approach (until Firebase Storage is set up)
   Future<void> _pickImage() async {
     try {
       // Check for appropriate storage permissions based on Android version
@@ -817,35 +815,41 @@ class _ChatPageState extends State<ChatPage> {
         dialogShown = true;
         
         try {
-          // Read file as bytes and convert to base64
-          final Uint8List imageBytes = await file.readAsBytes();
-          final String base64Image = base64Encode(imageBytes);
-          
           final currentUser = _auth.currentUser;
           if (currentUser == null) {
             throw Exception('User not logged in');
           }
+
+          // Fallback to putData using bytes
+          final extension = image.path.split('.').last;
+          final fileName = '${DateTime.now().millisecondsSinceEpoch}.$extension';
+          final ref = FirebaseStorage.instance
+              .ref()
+              .child('chat_images/${widget.conversationId}/$fileName');
+          final bytes = await image.readAsBytes();
+          final mimeType = lookupMimeType(image.path) ?? 'application/octet-stream';
+          print('DEBUG: Uploading ${bytes.length} bytes as $mimeType to ${ref.fullPath}');
+          final uploadTask = ref.putData(bytes, SettableMetadata(contentType: mimeType));
+          uploadTask.snapshotEvents.listen((event) {
+            print('DEBUG: upload state: ${event.state}, transferred ${event.bytesTransferred}/${event.totalBytes}');
+          });
+          print('DEBUG: awaiting upload completion (data)');
+          final TaskSnapshot snapshot = await uploadTask;
+          print('DEBUG: upload completed (data)');
+          final downloadUrl = await snapshot.ref.getDownloadURL();
+          print('DEBUG: downloadURL: $downloadUrl');
           
-          // Create message with embedded base64 image
           await _messages.add({
             'text': '(Image)',
-            'base64Image': base64Image, // Store image directly in Firestore
+            'imageUrl': downloadUrl,
+            'imageName': fileName,
             'sender': currentUser.uid,
             'timestamp': FieldValue.serverTimestamp(),
             'conversationId': widget.conversationId,
             'reactions': {},
           });
           
-          // Update conversation
-          await FirebaseFirestore.instance
-              .collection('conversations')
-              .doc(widget.conversationId)
-              .update({
-            'lastMessage': '📷 Image',
-            'lastUpdated': FieldValue.serverTimestamp(),
-          });
-          
-          print('DEBUG: Image shared successfully using base64');
+          print('DEBUG: Image shared successfully using Firebase Storage');
         } catch (e) {
           print('ERROR: Failed to process and send image: $e');
           if (mounted) {
@@ -873,7 +877,7 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  void _showFullScreenImage(String base64Image) {
+  void _showFullScreenImage(String imageUrl) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -884,8 +888,8 @@ class _ChatPageState extends State<ChatPage> {
               panEnabled: true,
               minScale: 0.5,
               maxScale: 4,
-              child: Image.memory(
-                base64Decode(base64Image),
+              child: Image.network(
+                imageUrl,
                 fit: BoxFit.contain,
               ),
             ),
@@ -903,12 +907,12 @@ class _ChatPageState extends State<ChatPage> {
                 actions: [
                   IconButton(
                     icon: const Icon(Icons.download, color: Colors.white),
-                    onPressed: () => _saveImageToGallery(base64Image),
+                    onPressed: () => _saveImageToGallery(imageUrl),
                     tooltip: 'Save to gallery',
                   ),
                   IconButton(
                     icon: const Icon(Icons.share, color: Colors.white),
-                    onPressed: () => _shareImage(base64Image),
+                    onPressed: () => _shareImage(imageUrl),
                     tooltip: 'Share image',
                   ),
                 ],
@@ -920,7 +924,7 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  Future<void> _saveImageToGallery(String base64Image) async {
+  Future<void> _saveImageToGallery(String imageUrl) async {
     try {
       bool hasPermission = false;
       if (Platform.isAndroid) {
@@ -952,7 +956,7 @@ class _ChatPageState extends State<ChatPage> {
         const SnackBar(content: Text('Saving image...')),
       );
       
-      final Uint8List imageData = base64Decode(base64Image);
+      final Uint8List imageData = await http.readBytes(Uri.parse(imageUrl));
       
       final tempDir = await Directory.systemTemp.createTemp('images');
       final tempFile = File('${tempDir.path}/temp_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
@@ -979,13 +983,13 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
   
-  Future<void> _shareImage(String base64Image) async {
+  Future<void> _shareImage(String imageUrl) async {
     try {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Preparing to share...')),
       );
       
-      final Uint8List imageData = base64Decode(base64Image);
+      final Uint8List imageData = await http.readBytes(Uri.parse(imageUrl));
       
       final tempDir = await Directory.systemTemp.createTemp('share');
       final tempFile = File('${tempDir.path}/share_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
