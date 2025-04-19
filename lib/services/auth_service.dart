@@ -25,7 +25,10 @@ class AuthService {
         await user.reload(); // Force reload after update
         final updatedUser = _auth.currentUser;
         await _firestore.collection('users').doc(user.uid).set({
-          'username': username,
+          'displayName': username,
+          'bio': '',
+          'photoUrl': '',
+          'email': user.email ?? '',
           'uid': user.uid,
           'createdAt': FieldValue.serverTimestamp(),
         });

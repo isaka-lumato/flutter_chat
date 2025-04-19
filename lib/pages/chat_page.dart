@@ -14,6 +14,7 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
+import 'profile_page.dart';
 
 class ChatPage extends StatefulWidget {
   final String conversationId;
@@ -290,14 +291,32 @@ class _ChatPageState extends State<ChatPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          children: [
-            Text(widget.otherUserName, style: theme.textTheme.titleMedium),
-            Text(
-              'Online',
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.green),
-            ),
-          ],
+        title: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ProfilePage(userId: widget.otherUserId),
+              ),
+            );
+          },
+          child: Column(
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(widget.otherUserName, style: theme.textTheme.titleMedium),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.info_outline, size: 18, color: Colors.blueGrey),
+                ],
+              ),
+              Text(
+                'Online',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.green),
+              ),
+            ],
+          ),
         ),
       ),
       body: Container(
@@ -398,27 +417,9 @@ class _ChatPageState extends State<ChatPage> {
                               fit: BoxFit.cover,
                               width: double.infinity,
                               height: 200,
-                              errorBuilder: (context, error, stackTrace) {
-                                print('DEBUG: Failed to load image: $error');
-                                return Container(
-                                  height: 200,
-                                  width: double.infinity,
-                                  color: Colors.grey.shade200,
-                                  alignment: Alignment.center,
-                                  child: const Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.broken_image, size: 48, color: Colors.grey),
-                                      SizedBox(height: 8),
-                                      Text('Failed to load image', style: TextStyle(color: Colors.grey))
-                                    ],
-                                  ),
-                                );
-                              },
                             ),
                           ),
                         ),
-                      if (messageData['text'] != null && messageData['text'].isNotEmpty && messageData['text'] != '(Image)')
                         Text(
                           messageData['text'],
                           style: theme.textTheme.bodyLarge?.copyWith(

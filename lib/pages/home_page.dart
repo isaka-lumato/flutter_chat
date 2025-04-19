@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_chat_mvp/pages/chat_page.dart';
 import 'package:flutter_chat_mvp/pages/new_chat_page.dart';
+import 'package:flutter_chat_mvp/pages/profile_page.dart';
+
 import 'package:flutter_chat_mvp/services/auth_service.dart';
 import 'package:flutter_chat_mvp/pages/login_page.dart';
 
@@ -26,6 +28,17 @@ class HomePage extends StatelessWidget {
         ),
         elevation: 4, // Add subtle shadow
         actions: [
+          IconButton(
+            icon: const Icon(Icons.account_circle, color: Color(0xFFE5C3A6), size: 28),
+            tooltip: 'Profile',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ProfilePage()),
+              );
+            },
+          ),
+
           IconButton(
             icon: const Icon(
               Icons.logout,
@@ -76,9 +89,9 @@ class HomePage extends StatelessWidget {
                       var conversation =
                           conversations[index].data() as Map<String, dynamic>;
                       String conversationId = conversations[index].id;
-                      String otherUserName =
-                          conversation['otherUserName'] ?? 'Chat';
-                      String otherUserId = conversation['otherUserId'] ?? '';
+                      List participants = conversation['participants'] ?? [];
+                      String otherUserId = participants.firstWhere((id) => id != currentUser!.uid, orElse: () => '');
+                      String otherUserName = conversation['otherUserName'] ?? 'Chat';
                       return Card(
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
