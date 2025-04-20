@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:flutter_chat_mvp/providers.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'services/presence_service.dart';
 import 'package:flutter_chat_mvp/pages/login_page.dart';
 import 'package:flutter_chat_mvp/pages/home_page.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -46,7 +49,14 @@ Future<void> main() async {
   } catch (e) {
     print('Error initializing Firebase: $e');
   }
-  runApp(const MyApp());
+  // Initialize presence tracking for authenticated users
+  PresenceService().initialize();
+  runApp(
+    MultiProvider(
+      providers: appProviders,
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {

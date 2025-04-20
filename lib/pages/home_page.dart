@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_chat_mvp/pages/chat_page.dart';
 import 'package:flutter_chat_mvp/pages/new_chat_page.dart';
 import 'package:flutter_chat_mvp/pages/profile_page.dart';
+import 'package:flutter_chat_mvp/services/user_status_service.dart';
 
 import 'package:flutter_chat_mvp/services/auth_service.dart';
 import 'package:flutter_chat_mvp/pages/login_page.dart';
@@ -102,12 +103,35 @@ class HomePage extends StatelessWidget {
                             horizontal: 16,
                             vertical: 8,
                           ),
-                          title: Text(
-                            otherUserName,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
+                          title: Row(
+                            children: [
+                              StreamBuilder<Map<String, dynamic>?>(
+                                stream: UserStatusService.userStatusStream(otherUserId),
+                                builder: (context, statusSnapshot) {
+                                  final isOnline = statusSnapshot.data?['online'] == true;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(right: 6.0),
+                                    child: isOnline
+                                        ? Container(
+                                            width: 10,
+                                            height: 10,
+                                            decoration: BoxDecoration(
+                                              color: Colors.green,
+                                              shape: BoxShape.circle,
+                                            ),
+                                          )
+                                        : SizedBox(width: 10, height: 10),
+                                  );
+                                },
+                              ),
+                              Text(
+                                otherUserName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
                           ),
                           trailing: const Icon(Icons.arrow_forward_ios),
                           onTap: () {

@@ -23,6 +23,7 @@ class _LoginPageState extends State<LoginPage> {
 
   // Variable to store and display error messages to the user
   String? _errorMessage;
+  bool _isLoading = false;
 
   @override
   Widget build(BuildContext context) {
@@ -52,11 +53,17 @@ class _LoginPageState extends State<LoginPage> {
                 TextFormField(
                   controller: _usernameController, // Attach the controller
                   decoration: const InputDecoration(labelText: 'Username'),
-                  validator:
-                      (value) =>
-                          value!.isEmpty
-                              ? 'Enter a username'
-                              : null, // Validate that the field is not empty
+                  validator: (value) {
+                    final username = value ?? '';
+                    final usernameRegExp = RegExp(r'^[a-zA-Z0-9_]{3,}$');
+                    if (username.isEmpty) {
+                      return 'Enter a username';
+                    }
+                    if (!usernameRegExp.hasMatch(username)) {
+                      return 'Username must be at least 3 characters and only contain letters, numbers, or _';
+                    }
+                    return null;
+                  },
                 ),
 
                 // TextFormField for password input
@@ -98,9 +105,12 @@ class _LoginPageState extends State<LoginPage> {
                       },
                     ),
                   ),
-                  onPressed: () async {
+                  onPressed: _isLoading ? null : () async {
                     if (_formKey.currentState!.validate()) {
-                      setState(() => _errorMessage = null);
+                      setState(() {
+                        _errorMessage = null;
+                        _isLoading = true;
+                      });
                       try {
                         User? user;
                         try {
@@ -142,10 +152,21 @@ class _LoginPageState extends State<LoginPage> {
                           );
                           setState(() => _errorMessage = e.toString());
                         }
+                      } finally {
+                        if (mounted) setState(() => _isLoading = false);
                       }
                     }
                   },
-                  child: const Text('Login or Register'),
+                  child: _isLoading
+                      ? SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Login or Register'),
                 ),
               ],
             ),

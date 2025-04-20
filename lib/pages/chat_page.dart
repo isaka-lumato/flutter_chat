@@ -5,7 +5,6 @@ import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -13,8 +12,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:http/http.dart' as http;
-import 'package:mime/mime.dart';
 import 'profile_page.dart';
+import 'package:flutter_chat_mvp/services/user_status_service.dart';
+import 'package:flutter_chat_mvp/services/media_repository.dart';
+import 'package:provider/provider.dart';
 
 class ChatPage extends StatefulWidget {
   final String conversationId;
@@ -33,6 +34,15 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  String _formatLastSeen(DateTime lastSeen) {
+    final now = DateTime.now();
+    final diff = now.difference(lastSeen);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+    if (diff.inHours < 24) return '${diff.inHours} hr ago';
+    return '${lastSeen.year}-${lastSeen.month.toString().padLeft(2, '0')}-${lastSeen.day.toString().padLeft(2, '0')} ${lastSeen.hour.toString().padLeft(2, '0')}:${lastSeen.minute.toString().padLeft(2, '0')}';
+  }
+
   final TextEditingController _messageController = TextEditingController();
   final FirebaseAuth _auth = FirebaseAuth.instance;
   late User currentUser;
@@ -119,6 +129,7 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+
   // Voice recording methods
   Future<void> _startRecording() async {
     if (!_isRecorderInitialized) {
@@ -197,33 +208,29 @@ class _ChatPageState extends State<ChatPage> {
   
   Future<void> _sendVoiceMessage(String filePath) async {
     try {
-      // Show sending indicator
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Sending voice message...')),
         );
       }
-      
       final File file = File(filePath);
       final currentUser = _auth.currentUser;
       if (currentUser == null) {
         throw Exception('User not logged in');
       }
-
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}.m4a';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('chat_audio/${widget.conversationId}/$fileName');
-      final uploadTask = ref.putFile(file, SettableMetadata(contentType: 'audio/m4a'));
-      final snapshot = await uploadTask;
-      final downloadUrl = await snapshot.ref.getDownloadURL();
-
+      // Use MediaRepository to upload audio
+      final mediaRepository = Provider.of<MediaRepository>(context, listen: false);
+      final downloadUrl = await mediaRepository.uploadAudio(
+        file: file,
+        conversationId: widget.conversationId,
+        uploadedBy: currentUser.uid,
+      );
       await _messages.add({
         'sender': currentUser.uid,
         'timestamp': FieldValue.serverTimestamp(),
         'text': '(Voice message)',
         'audioUrl': downloadUrl,
-        'audioName': fileName,
+        'audioName': file.path.split('/').last,
         'audioDuration': _recordingDuration,
         'conversationId': widget.conversationId,
         'reactions': {},
@@ -233,7 +240,6 @@ class _ChatPageState extends State<ChatPage> {
         'lastMessageTimestamp': FieldValue.serverTimestamp(),
       });
       await file.delete();
-      
     } catch (e) {
       print('Error sending voice message: $e');
       if (mounted) {
@@ -311,9 +317,32 @@ class _ChatPageState extends State<ChatPage> {
                   const Icon(Icons.info_outline, size: 18, color: Colors.blueGrey),
                 ],
               ),
-              Text(
-                'Online',
-                style: theme.textTheme.bodySmall?.copyWith(color: Colors.green),
+              StreamBuilder<Map<String, dynamic>?>(
+                stream: UserStatusService.userStatusStream(widget.otherUserId),
+                builder: (context, snapshot) {
+                  final status = snapshot.data;
+                  if (status == null) {
+                    return const SizedBox.shrink();
+                  }
+                  if (status['online'] == true) {
+                    return Text(
+                      'Online',
+                      style: theme.textTheme.bodySmall?.copyWith(color: Colors.green),
+                    );
+                  } else if (status['lastSeen'] != null) {
+                    final lastSeen = DateTime.fromMillisecondsSinceEpoch(status['lastSeen']);
+                    final formatted = _formatLastSeen(lastSeen);
+                    return Text(
+                      'Last seen $formatted',
+                      style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
+                    );
+                  } else {
+                    return Text(
+                      'Offline',
+                      style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
+                    );
+                  }
+                },
               ),
             ],
           ),
@@ -821,36 +850,23 @@ class _ChatPageState extends State<ChatPage> {
             throw Exception('User not logged in');
           }
 
-          // Fallback to putData using bytes
-          final extension = image.path.split('.').last;
-          final fileName = '${DateTime.now().millisecondsSinceEpoch}.$extension';
-          final ref = FirebaseStorage.instance
-              .ref()
-              .child('chat_images/${widget.conversationId}/$fileName');
-          final bytes = await image.readAsBytes();
-          final mimeType = lookupMimeType(image.path) ?? 'application/octet-stream';
-          print('DEBUG: Uploading ${bytes.length} bytes as $mimeType to ${ref.fullPath}');
-          final uploadTask = ref.putData(bytes, SettableMetadata(contentType: mimeType));
-          uploadTask.snapshotEvents.listen((event) {
-            print('DEBUG: upload state: ${event.state}, transferred ${event.bytesTransferred}/${event.totalBytes}');
-          });
-          print('DEBUG: awaiting upload completion (data)');
-          final TaskSnapshot snapshot = await uploadTask;
-          print('DEBUG: upload completed (data)');
-          final downloadUrl = await snapshot.ref.getDownloadURL();
-          print('DEBUG: downloadURL: $downloadUrl');
-          
+          // Use MediaRepository to upload image
+          final mediaRepository = Provider.of<MediaRepository>(context, listen: false);
+          final downloadUrl = await mediaRepository.uploadImage(
+            file: file,
+            conversationId: widget.conversationId,
+            uploadedBy: currentUser.uid,
+          );
           await _messages.add({
             'text': '(Image)',
             'imageUrl': downloadUrl,
-            'imageName': fileName,
+            'imageName': file.path.split('/').last,
             'sender': currentUser.uid,
             'timestamp': FieldValue.serverTimestamp(),
             'conversationId': widget.conversationId,
             'reactions': {},
           });
-          
-          print('DEBUG: Image shared successfully using Firebase Storage');
+          print('DEBUG: Image shared successfully using MediaRepository');
         } catch (e) {
           print('ERROR: Failed to process and send image: $e');
           if (mounted) {
@@ -908,12 +924,12 @@ class _ChatPageState extends State<ChatPage> {
                 actions: [
                   IconButton(
                     icon: const Icon(Icons.download, color: Colors.white),
-                    onPressed: () => _saveImageToGallery(imageUrl),
+                    onPressed: () => Provider.of<MediaRepository>(context, listen: false).saveImageToGallery(imageUrl, context: context),
                     tooltip: 'Save to gallery',
                   ),
                   IconButton(
                     icon: const Icon(Icons.share, color: Colors.white),
-                    onPressed: () => _shareImage(imageUrl),
+                    onPressed: () => Provider.of<MediaRepository>(context, listen: false).shareImage(imageUrl, context: context),
                     tooltip: 'Share image',
                   ),
                 ],
@@ -925,97 +941,9 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  Future<void> _saveImageToGallery(String imageUrl) async {
-    try {
-      bool hasPermission = false;
-      if (Platform.isAndroid) {
-        if (await Permission.photos.status.isGranted) {
-          hasPermission = true;
-        } else {
-          final result = await Permission.photos.request();
-          hasPermission = result.isGranted;
-        }
-      } else {
-        if (await Permission.storage.status.isGranted) {
-          hasPermission = true;
-        } else {
-          final result = await Permission.storage.request();
-          hasPermission = result.isGranted;
-        }
-      }
-      
-      if (!hasPermission) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Storage permission is required to save images')),
-          );
-        }
-        return;
-      }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saving image...')),
-      );
-      
-      final Uint8List imageData = await http.readBytes(Uri.parse(imageUrl));
-      
-      final tempDir = await Directory.systemTemp.createTemp('images');
-      final tempFile = File('${tempDir.path}/temp_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
-      await tempFile.writeAsBytes(imageData);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Image saved to gallery'),
-          backgroundColor: Colors.green,
-        ),
-      );
-      
-      await tempDir.delete(recursive: true);
-    } catch (e) {
-      print('ERROR: Failed to save image: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to save image: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
   
-  Future<void> _shareImage(String imageUrl) async {
-    try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Preparing to share...')),
-      );
-      
-      final Uint8List imageData = await http.readBytes(Uri.parse(imageUrl));
-      
-      final tempDir = await Directory.systemTemp.createTemp('share');
-      final tempFile = File('${tempDir.path}/share_image_${DateTime.now().millisecondsSinceEpoch}.jpg');
-      await tempFile.writeAsBytes(imageData);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Sharing functionality will be available soon'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      
-      await tempDir.delete(recursive: true);
-    } catch (e) {
-      print('ERROR: Failed to share image: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to share image: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
+
 }
 
 class WaveformPainter extends CustomPainter {
