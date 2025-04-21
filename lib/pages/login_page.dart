@@ -11,19 +11,16 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  // GlobalKey for the form to manage form state and validation
   final _formKey = GlobalKey<FormState>();
-
-  // TextEditingControllers to manage the text input for username and password
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-
-  // Instance of AuthService to handle authentication logic
   final _authService = AuthService();
 
-  // Variable to store and display error messages to the user
   String? _errorMessage;
   bool _isLoading = false;
+  bool _isSignUp = false; // Toggle between sign in and sign up
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +76,54 @@ class _LoginPageState extends State<LoginPage> {
                 ),
                 const SizedBox(height: 20),
 
-                // Button to trigger login/register process
+                // Google Sign-In Button
+                ElevatedButton.icon(
+                  // NOTE: Google Drive links like 'https://drive.google.com/file/d/...' are not direct image links and will not work with Image.network.
+icon: Image.network(
+  'https://img.icons8.com/color/48/000000/google-logo.png',
+  height: 24,
+  width: 24,
+  errorBuilder: (context, error, stackTrace) => Icon(Icons.error, color: Colors.red),
+),
+                  label: const Text('Sign in with Google'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    minimumSize: const Size(double.infinity, 48),
+                    side: const BorderSide(color: Colors.grey),
+                  ),
+                  onPressed: _isLoading
+                      ? null
+                      : () async {
+                          setState(() {
+                            _isLoading = true;
+                            _errorMessage = null;
+                          });
+                          try {
+                            final user = await _authService.signInWithGoogle();
+                            if (user != null) {
+                              Navigator.pushReplacement(
+                                context,
+                                MaterialPageRoute(builder: (context) => const HomePage()),
+                              );
+                            }
+                          } catch (e) {
+                            setState(() => _errorMessage = e.toString());
+                          } finally {
+                            setState(() => _isLoading = false);
+                          }
+                        },
+                ),
+                const SizedBox(height: 16),
+                // Note about username usage
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8.0),
+                  child: Text(
+                    'Note: Your username will be used as your login. No email required.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+                // Button to trigger sign in or sign up
                 ElevatedButton(
                   style: ButtonStyle(
                     backgroundColor: MaterialStateProperty.all(Colors.blue.shade600),
@@ -113,26 +157,17 @@ class _LoginPageState extends State<LoginPage> {
                       });
                       try {
                         User? user;
-                        try {
-                          // Attempt to sign in
-                          user = await _authService
-                              .signInWithUsernameAndPassword(
-                                _usernameController.text,
-                                _passwordController.text,
-                              );
-                        } on FirebaseAuthException catch (e) {
-                          if (e.code == 'user-not-found') {
-                            // If not found, attempt to sign up
-                            user = await _authService
-                                .signUpWithUsernameAndPassword(
-                                  _usernameController.text,
-                                  _passwordController.text,
-                                );
-                          } else {
-                            rethrow;
-                          }
+                        if (_isSignUp) {
+                          user = await _authService.signUpWithUsernameAndPassword(
+                            _usernameController.text,
+                            _passwordController.text,
+                          );
+                        } else {
+                          user = await _authService.signInWithUsernameAndPassword(
+                            _usernameController.text,
+                            _passwordController.text,
+                          );
                         }
-
                         if (user != null) {
                           Navigator.pushReplacement(
                             context,
@@ -143,13 +178,8 @@ class _LoginPageState extends State<LoginPage> {
                         }
                       } catch (e) {
                         if (e is FirebaseAuthException) {
-                          print("Firebase Auth Error Code: ${e.code}");
-                          print("Firebase Auth Error Message: ${e.message}");
                           setState(() => _errorMessage = e.message ?? e.code);
                         } else {
-                          print(
-                            "Generic Error during Login/Register: ${e.toString()}",
-                          );
                           setState(() => _errorMessage = e.toString());
                         }
                       } finally {
@@ -158,7 +188,7 @@ class _LoginPageState extends State<LoginPage> {
                     }
                   },
                   child: _isLoading
-                      ? SizedBox(
+                      ? const SizedBox(
                           width: 24,
                           height: 24,
                           child: CircularProgressIndicator(
@@ -166,8 +196,39 @@ class _LoginPageState extends State<LoginPage> {
                             color: Colors.white,
                           ),
                         )
-                      : const Text('Login or Register'),
+                      : Text(_isSignUp ? 'Sign Up' : 'Sign In'),
                 ),
+                const SizedBox(height: 12),
+                // Toggle between sign in and sign up
+                GestureDetector(
+                  onTap: _isLoading
+                      ? null
+                      : () {
+                          setState(() {
+                            _isSignUp = !_isSignUp;
+                            _errorMessage = null;
+                          });
+                        },
+                  child: Text(
+                    _isSignUp
+                        ? 'Already have an account? Sign In'
+                        : 'Don\'t have an account? Sign Up',
+                    style: const TextStyle(
+                      color: Colors.blue,
+                      decoration: TextDecoration.underline,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+                // Placeholder for password reset
+                // Uncomment and implement if you want password reset
+                // const SizedBox(height: 8),
+                // GestureDetector(
+                //   onTap: () {
+                //     // TODO: Implement password reset
+                //   },
+                //   child: Text('Forgot password?', style: TextStyle(color: Colors.blue)),
+                // ),
               ],
             ),
           ),

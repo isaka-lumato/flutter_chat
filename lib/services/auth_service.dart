@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -14,25 +15,31 @@ class AuthService {
     String password,
   ) async {
     try {
+      print('DEBUG: Starting signUpWithUsernameAndPassword for username: $username');
       // Check if username is taken in Firestore
       final query = await _firestore
           .collection('users')
           .where('displayName', isEqualTo: username)
           .limit(1)
           .get();
+      print('DEBUG: Username check complete, docs found: ${query.docs.length}');
       if (query.docs.isNotEmpty) {
+        print('DEBUG: Username already in use');
         throw FirebaseAuthException(
           code: 'username-already-in-use',
           message: 'That username is already taken. Please choose another.',
         );
       }
       final email = "$username@example.com";
+      print('DEBUG: Creating user with email: $email');
       final UserCredential result = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
       final User? user = result.user;
+      print('DEBUG: User creation result: ${user?.uid}');
       if (user != null) {
+        print('DEBUG: Updating displayName and writing user doc to Firestore');
         // Update display name and store user data in Firestore in parallel
         await Future.wait([
           user.updateDisplayName(username),
@@ -45,15 +52,20 @@ class AuthService {
             'createdAt': FieldValue.serverTimestamp(),
           }),
         ]);
+        print('DEBUG: Firestore write and displayName update complete');
         return user;
       }
+      print('DEBUG: User is null after creation');
       return user;
     } on FirebaseAuthException catch (e) {
+      print('DEBUG: FirebaseAuthException: ${e.code} ${e.message}');
       throw FirebaseAuthException(
         code: e.code,
         message: _friendlyAuthError(e),
       );
-    } catch (e) {
+    } catch (e, stack) {
+      print('DEBUG: Unknown error in signUpWithUsernameAndPassword: $e');
+      print(stack);
       throw Exception('An unknown error occurred. Please try again.');
     }
   }
@@ -88,6 +100,19 @@ class AuthService {
       print("Error signing out: $e");
       rethrow;
     }
+  }
+
+  // Google Sign-In
+  Future<User?> signInWithGoogle() async {
+    final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+    if (googleUser == null) return null;
+    final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+    final credential = GoogleAuthProvider.credential(
+      accessToken: googleAuth.accessToken,
+      idToken: googleAuth.idToken,
+    );
+    final UserCredential userCredential = await _auth.signInWithCredential(credential);
+    return userCredential.user;
   }
 
   // Helper for user-friendly error messages
