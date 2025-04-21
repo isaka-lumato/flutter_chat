@@ -104,36 +104,85 @@ class HomePage extends StatelessWidget {
                             vertical: 8,
                           ),
                           title: Row(
-                            children: [
-                              StreamBuilder<Map<String, dynamic>?>(
-                                stream: UserStatusService.userStatusStream(otherUserId),
-                                builder: (context, statusSnapshot) {
-                                  final isOnline = statusSnapshot.data?['online'] == true;
-                                  return Padding(
-                                    padding: const EdgeInsets.only(right: 6.0),
-                                    child: isOnline
-                                        ? Container(
-                                            width: 10,
-                                            height: 10,
-                                            decoration: BoxDecoration(
-                                              color: Colors.green,
-                                              shape: BoxShape.circle,
-                                            ),
-                                          )
-                                        : SizedBox(width: 10, height: 10),
-                                  );
-                                },
-                              ),
-                              Text(
-                                otherUserName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ],
-                          ),
-                          trailing: const Icon(Icons.arrow_forward_ios),
+  children: [
+    // Profile picture
+    FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance.collection('users').doc(otherUserId).get(),
+      builder: (context, snapshot) {
+        String? photoUrl;
+        if (snapshot.connectionState == ConnectionState.done && snapshot.hasData) {
+          final data = snapshot.data!.data() as Map<String, dynamic>?;
+          photoUrl = data?['photoUrl'] as String?;
+        }
+        return Padding(
+          padding: const EdgeInsets.only(right: 10.0),
+          child: CircleAvatar(
+            radius: 18,
+            backgroundColor: Colors.grey.shade300,
+            backgroundImage: (photoUrl != null && photoUrl.isNotEmpty)
+                ? NetworkImage(photoUrl)
+                : null,
+            child: (photoUrl == null || photoUrl.isEmpty)
+                ? Icon(Icons.person, size: 18, color: Colors.grey.shade700)
+                : null,
+          ),
+        );
+      },
+    ),
+    // Online indicator
+    StreamBuilder<Map<String, dynamic>?>(
+      stream: UserStatusService.userStatusStream(otherUserId),
+      builder: (context, statusSnapshot) {
+        debugPrint('User $otherUserId status: \\${statusSnapshot.data}');
+        final isOnline = statusSnapshot.data?['online'] == true;
+        return Padding(
+          padding: const EdgeInsets.only(right: 6.0),
+          child: isOnline
+              ? Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: Colors.green,
+                    shape: BoxShape.circle,
+                  ),
+                )
+              : SizedBox(width: 10, height: 10),
+        );
+      },
+    ),
+    // Username
+    Text(
+      otherUserName,
+      style: const TextStyle(
+        fontWeight: FontWeight.bold,
+        fontSize: 16,
+      ),
+    ),
+  ],
+),
+                          subtitle: Builder(
+  builder: (context) {
+    final statusStream = UserStatusService.userStatusStream(otherUserId);
+    return StreamBuilder<Map<String, dynamic>?>(
+      stream: statusStream,
+      builder: (context, statusSnapshot) {
+        final isOnline = statusSnapshot.data?['online'] == true;
+        final lastSeen = statusSnapshot.data?['lastSeen'];
+        String statusText;
+        if (isOnline) {
+          statusText = 'Online';
+        } else if (lastSeen != null) {
+          final dt = DateTime.fromMillisecondsSinceEpoch(lastSeen is int ? lastSeen : int.tryParse(lastSeen.toString()) ?? 0);
+          statusText = 'Last seen: \\${dt.year}-\\${dt.month.toString().padLeft(2, '0')}-\\${dt.day.toString().padLeft(2, '0')} \\${dt.hour.toString().padLeft(2, '0')}:\\${dt.minute.toString().padLeft(2, '0')}';
+        } else {
+          statusText = 'Last seen: Unknown';
+        }
+        return Text(statusText, style: const TextStyle(fontSize: 12, color: Colors.grey));
+      },
+    );
+  },
+),
+trailing: const Icon(Icons.arrow_forward_ios),
                           onTap: () {
                             Navigator.push(
                               context,

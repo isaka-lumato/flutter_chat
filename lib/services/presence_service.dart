@@ -23,6 +23,15 @@ class PresenceService with WidgetsBindingObserver {
   }
 
   void _setupPresence() {
+    // Always set a node for this user if it doesn't exist
+    _userStatusDatabaseRef!.get().then((snapshot) {
+      if (!snapshot.exists) {
+        _userStatusDatabaseRef!.set({
+          'online': true,
+          'lastSeen': ServerValue.timestamp,
+        });
+      }
+    });
     final connectedRef = FirebaseDatabase.instance.ref('.info/connected');
     _connectionSubscription = connectedRef.onValue.listen((event) {
       final connected = event.snapshot.value as bool? ?? false;

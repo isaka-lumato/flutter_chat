@@ -37,12 +37,18 @@ class NewChatPage extends StatelessWidget {
                 margin: const EdgeInsets.symmetric(vertical: 6.0),
                 child: ListTile(
                   leading: CircleAvatar(
-                    backgroundColor: Colors.green,
-                    child: Text(
-                      otherUserName.substring(0, 1).toUpperCase(),
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
+  radius: 22,
+  backgroundColor: Colors.grey.shade300,
+  backgroundImage: (data['photoUrl'] != null && (data['photoUrl'] as String).isNotEmpty)
+      ? NetworkImage(data['photoUrl'])
+      : null,
+  child: (data['photoUrl'] == null || (data['photoUrl'] as String).isEmpty)
+      ? Text(
+          otherUserName.substring(0, 1).toUpperCase(),
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+        )
+      : null,
+),
                   title: Text(otherUserName, style: GoogleFonts.lato()),
                   onTap: () async {
                     List<String> ids = [currentUser.uid, otherUserId];
