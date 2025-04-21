@@ -21,12 +21,13 @@ class ImageService {
     return null;
   }
 
-  Future<String?> uploadImage(File imageFile, String chatId) async {
+  Future<String?> uploadImage(File imageFile, String folderId, {bool isProfilePhoto = false}) async {
     try {
       final String fileName =
           '${DateTime.now().millisecondsSinceEpoch}${path.extension(imageFile.path)}';
-      final Reference ref =
-          _storage.ref().child('chat_images/$chatId/$fileName');
+      final Reference ref = isProfilePhoto
+          ? _storage.ref().child('profile_photos/$folderId/$fileName')
+          : _storage.ref().child('chat_images/$folderId/$fileName');
 
       final UploadTask uploadTask = ref.putFile(imageFile);
       final TaskSnapshot snapshot = await uploadTask;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'edit_profile_page.dart';
+import '../services/image_service.dart';
 
 class ProfilePage extends StatefulWidget {
   final String? userId; // If null, show current user's profile
@@ -84,15 +85,56 @@ class _ProfilePageState extends State<ProfilePage> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Center(
-                    child: CircleAvatar(
-                      radius: 56,
-                      backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
-                      backgroundImage: (photoUrl != null && photoUrl!.isNotEmpty)
-                          ? NetworkImage(photoUrl!)
-                          : null,
-                      child: (photoUrl == null || photoUrl!.isEmpty)
-                          ? Icon(Icons.person, size: 56, color: theme.colorScheme.primary)
-                          : null,
+                    child: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        CircleAvatar(
+                          radius: 56,
+                          backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
+                          backgroundImage: (photoUrl != null && photoUrl!.isNotEmpty)
+                              ? NetworkImage(photoUrl!)
+                              : null,
+                          child: (photoUrl == null || photoUrl!.isEmpty)
+                              ? Icon(Icons.person, size: 56, color: theme.colorScheme.primary)
+                              : null,
+                        ),
+                        if (isCurrentUser)
+                          Positioned(
+                            bottom: 4,
+                            right: 4,
+                            child: InkWell(
+                              onTap: () async {
+                                final imageService = ImageService();
+                                final file = await imageService.pickImage();
+                                if (file != null) {
+                                  // Use user.uid as the folder for profile photos
+                                  final uid = _auth.currentUser?.uid;
+                                  if (uid != null) {
+                                    final url = await imageService.uploadImage(file, uid, isProfilePhoto: true);
+                                    if (url != null) {
+                                      await _firestore.collection('users').doc(uid).set({
+                                        'photoUrl': url,
+                                      }, SetOptions(merge: true));
+                                      setState(() {
+                                        photoUrl = url;
+                                      });
+                                    } else {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('Failed to upload profile picture.')),
+                                      );
+                                    }
+                                  }
+                                }
+                              },
+                              borderRadius: BorderRadius.circular(24),
+                              child: CircleAvatar(
+                                radius: 18,
+                                backgroundColor: theme.colorScheme.primary,
+                                child: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 24),

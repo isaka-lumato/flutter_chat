@@ -96,6 +96,7 @@ class AuthService {
   Future<void> signOut() async {
     try {
       await _auth.signOut();
+      await GoogleSignIn().signOut(); // Also sign out from Google
     } catch (e) {
       print("Error signing out: $e");
       rethrow;
@@ -112,7 +113,31 @@ class AuthService {
       idToken: googleAuth.idToken,
     );
     final UserCredential userCredential = await _auth.signInWithCredential(credential);
-    return userCredential.user;
+    final User? user = userCredential.user;
+    if (user != null) {
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      String username = user.displayName ?? '';
+      // If displayName is not set, use the email prefix
+      if (username.isEmpty && user.email != null && user.email!.contains('@')) {
+        username = user.email!.split('@')[0];
+        await user.updateDisplayName(username);
+      }
+      // If user doc does not exist or missing displayName, set it
+      final docData = userDoc.data();
+      final firestoreDisplayName = docData != null ? docData['displayName'] as String? : null;
+      if (!userDoc.exists || firestoreDisplayName == null || firestoreDisplayName.isEmpty) {
+        await _firestore.collection('users').doc(user.uid).set({
+          'displayName': username,
+          'username': username, // Set username same as displayName by default
+          'bio': '',
+          'photoUrl': user.photoURL ?? '',
+          'email': user.email ?? '',
+          'uid': user.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    }
+    return user;
   }
 
   // Helper for user-friendly error messages
