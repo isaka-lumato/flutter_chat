@@ -58,6 +58,7 @@ class _ChatPageState extends State<ChatPage> {
   Timer? _recordingTimer;
   int _recordingDuration = 0;
   final Map<String, FlutterSoundPlayer> _audioPlayers = {};
+  final Set<String> _deletedMessagesForMe = {};
 
   @override
   void dispose() {
@@ -78,10 +79,31 @@ class _ChatPageState extends State<ChatPage> {
     currentUser = _auth.currentUser!;
     _conversation = FirebaseFirestore.instance.collection('conversations').doc(widget.conversationId);
     _messages = _conversation.collection('messages');
+    // Reset unread message count for this user
+    _conversation.update({'unreadCounts.${currentUser.uid}': 0});
     // Initialize audio recorder
     _initRecorder();
     // Initialize audio player
     _initPlayer();
+    // In-app notification banner for incoming messages
+    _messages.orderBy('timestamp', descending: false)
+      .snapshots()
+      .skip(1)
+      .listen((snapshot) {
+        for (var change in snapshot.docChanges) {
+          if (change.type == DocumentChangeType.added) {
+            final data = change.doc.data() as Map<String, dynamic>;
+            if (data['sender'] != currentUser.uid && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('${widget.otherUserName}: ${data['text']}'),
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
+          }
+        }
+      });
   }
   
   Future<void> _initRecorder() async {
@@ -405,6 +427,9 @@ class _ChatPageState extends State<ChatPage> {
     bool isMe,
     ThemeData theme,
   ) {
+    if (_deletedMessagesForMe.contains(messageData['id'])) {
+      return const SizedBox();
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
       child: Column(
@@ -416,7 +441,92 @@ class _ChatPageState extends State<ChatPage> {
               if (!isMe) _buildAvatar(widget.otherUserName),
               const SizedBox(width: 8),
               GestureDetector(
-                onLongPress: () => _showReactionPicker(messageData['id']),
+                onLongPress: () async {
+                  final isMe = messageData['sender'] == _auth.currentUser?.uid;
+                  if (isMe) {
+                    final action = await showModalBottomSheet<String>(
+                      context: context,
+                      builder: (context) => SafeArea(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ListTile(
+                              leading: const Icon(Icons.delete_forever, color: Colors.red),
+                              title: const Text('Delete for Everyone'),
+                              onTap: () => Navigator.pop(context, 'delete_all'),
+                            ),
+                            ListTile(
+                              leading: const Icon(Icons.delete, color: Colors.grey),
+                              title: const Text('Delete for Me'),
+                              onTap: () => Navigator.pop(context, 'delete_me'),
+                            ),
+                            ListTile(
+                              leading: const Icon(Icons.emoji_emotions),
+                              title: const Text('React'),
+                              onTap: () => Navigator.pop(context, 'react'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                    if (action == 'delete_all') {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Delete Message'),
+                          content: const Text('Are you sure you want to delete this message?'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Cancel'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) {
+                        _deleteMessage(messageData['id']);
+                      }
+                    } else if (action == 'delete_me') {
+                      setState(() {
+                        _deletedMessagesForMe.add(messageData['id']);
+                      });
+                    } else if (action == 'react') {
+                      _showReactionPicker(messageData['id']);
+                    }
+                  } else {
+                    final action = await showModalBottomSheet<String>(
+                      context: context,
+                      builder: (context) => SafeArea(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ListTile(
+                              leading: const Icon(Icons.delete, color: Colors.grey),
+                              title: const Text('Delete for Me'),
+                              onTap: () => Navigator.pop(context, 'delete_me'),
+                            ),
+                            ListTile(
+                              leading: const Icon(Icons.emoji_emotions),
+                              title: const Text('React'),
+                              onTap: () => Navigator.pop(context, 'react'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                    if (action == 'delete_me') {
+                      setState(() {
+                        _deletedMessagesForMe.add(messageData['id']);
+                      });
+                    } else if (action == 'react') {
+                      _showReactionPicker(messageData['id']);
+                    }
+                  }
+                },
                 child: Container(
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.of(context).size.width * 0.7,
@@ -726,37 +836,37 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
-
-    final currentUser = _auth.currentUser;
-    if (currentUser == null) return;
-
+    _messageController.clear();
     try {
-      // Create message document
+      final uid = currentUser.uid;
       await _messages.add({
         'text': text,
-        'sender': currentUser.uid,
+        'sender': uid,
         'timestamp': FieldValue.serverTimestamp(),
         'conversationId': widget.conversationId,
         'reactions': {},
       });
-
-      // Update conversation
-      await FirebaseFirestore.instance
-          .collection('conversations')
-          .doc(widget.conversationId)
-          .update({
-        'lastMessage': text.length > 30 ? '${text.substring(0, 30)}...' : text,
-        'lastUpdated': FieldValue.serverTimestamp(),
-      });
-
-      _messageController.clear();
+      // Update conversation with last message and unread counts
+      final doc = await _conversation.get();
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final participants = List<String>.from(data['participants'] ?? []);
+      final Map<String, dynamic> updateData = {
+        'lastMessage': text,
+        'lastMessageTimestamp': FieldValue.serverTimestamp(),
+      };
+      for (var participant in participants) {
+        if (participant == uid) {
+          updateData['unreadCounts.$participant'] = 0;
+        } else {
+          updateData['unreadCounts.$participant'] = FieldValue.increment(1);
+        }
+      }
+      await _conversation.update(updateData);
     } catch (e) {
+      print('Error sending message: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to send message: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Failed to send message: $e')),
         );
       }
     }
@@ -941,9 +1051,22 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-
-  
-
+  Future<void> _deleteMessage(String messageId) async {
+    try {
+      await _messages.doc(messageId).delete();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message deleted')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete message: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
 }
 
 class WaveformPainter extends CustomPainter {

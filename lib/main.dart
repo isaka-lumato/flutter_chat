@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:provider/provider.dart';
 import 'package:flutter_chat_mvp/providers.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -9,7 +10,85 @@ import 'package:firebase_app_check/firebase_app_check.dart';
 import 'services/presence_service.dart';
 import 'package:flutter_chat_mvp/pages/login_page.dart';
 import 'package:flutter_chat_mvp/pages/home_page.dart';
+import 'package:flutter_chat_mvp/pages/chat_page.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'dart:convert';
+
+// Navigator key for push notification routing
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// Background message handler
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  _showLocalNotification(message);
+}
+
+// Local notifications plugin
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+// Setup local notifications channel
+Future<void> _setupLocalNotifications() async {
+  // Define notification channel
+  final AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'chat_messages',
+    'Chat Messages',
+    description: 'Notifications for new chat messages',
+    importance: Importance.max,
+  );
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+  // Initialize settings for Android
+  final AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+  final InitializationSettings initSettings = InitializationSettings(android: androidSettings);
+  await flutterLocalNotificationsPlugin.initialize(
+    initSettings,
+    // Handle notification tap
+    onDidReceiveNotificationResponse: (NotificationResponse response) {
+      final String? payload = response.payload;
+      if (payload != null) {
+        // Navigate based on payload content
+        navigatorKey.currentState?.pushNamed('/home', arguments: jsonDecode(payload));
+      }
+    },
+    // Handle background notification tap (Android)
+    onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
+  );
+}
+
+// Background tap handler (must be a top-level function)
+@pragma('vm:entry-point')
+void notificationTapBackground(NotificationResponse response) {
+  final String? payload = response.payload;
+  if (payload != null) {
+    navigatorKey.currentState?.pushNamed('/home', arguments: jsonDecode(payload));
+  }
+}
+
+// Show a local notification
+void _showLocalNotification(RemoteMessage message) {
+  final notif = message.notification;
+  final android = message.notification?.android;
+  if (notif != null && android != null) {
+    flutterLocalNotificationsPlugin.show(
+      notif.hashCode,
+      notif.title,
+      notif.body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'chat_messages',
+          'Chat Messages',
+          channelDescription: 'Chat message alerts',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+      payload: jsonEncode(message.data),
+    );
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,10 +130,25 @@ Future<void> main() async {
   }
   // Initialize presence tracking for authenticated users
   PresenceService().initialize();
+  // Initialize local notifications and FCM
+  await _setupLocalNotifications();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  final messaging = FirebaseMessaging.instance;
+  await messaging.requestPermission(alert: true, badge: true, sound: true);
+  messaging.getToken().then((token) => print('FCM Token: $token'));
+  FirebaseMessaging.onMessage.listen(_showLocalNotification);
+  FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+    final data = msg.data;
+    if (data['conversationId'] != null) {
+      navigatorKey.currentState?.pushNamed(
+        '/chat', arguments: data,
+      );
+    }
+  });
   runApp(
     MultiProvider(
       providers: appProviders,
-      child: const MyApp(),
+      child: MyApp(),
     ),
   );
 }
@@ -65,6 +159,18 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
+      routes: {
+        '/home': (ctx) => const HomePage(),
+        '/chat': (ctx) {
+          final args = ModalRoute.of(ctx)!.settings.arguments as Map<String, dynamic>;
+          return ChatPage(
+            conversationId: args['conversationId'],
+            otherUserId: args['otherUserId'],
+            otherUserName: args['otherUserName'],
+          );
+        },
+      },
       title: 'Flutter Chat MVP',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
