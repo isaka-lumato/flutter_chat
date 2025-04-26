@@ -484,6 +484,11 @@ class _ChatPageState extends State<ChatPage> {
     bool isMe,
     ThemeData theme,
   ) {
+    // Variable declarations must be at the top of the function
+    final imageUrl = messageData['imageUrl'];
+    final hasValidImage = imageUrl is String && imageUrl.trim().isNotEmpty;
+    final text = messageData['text'];
+    final hasValidText = text is String && text.trim().isNotEmpty;
     // Document message UI
     if ((messageData['type'] ?? '') == 'document') {
       final docName = messageData['documentName'] ?? 'Document';
@@ -631,25 +636,49 @@ class _ChatPageState extends State<ChatPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (messageData['imageUrl'] != null)
+                      if (hasValidImage)
                         GestureDetector(
-                          onTap: () => _showFullScreenImage(messageData['imageUrl']),
+                          onTap: () => _showFullScreenImage(imageUrl),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
                             child: Image.network(
-                              messageData['imageUrl'],
+                              imageUrl,
                               fit: BoxFit.cover,
                               width: double.infinity,
                               height: 200,
+                              errorBuilder: (context, error, stackTrace) => Container(
+                                color: Colors.grey.shade200,
+                                height: 200,
+                                width: double.infinity,
+                                child: const Center(child: Icon(Icons.broken_image, color: Colors.red)),
+                              ),
+                              loadingBuilder: (context, child, loadingProgress) {
+                                if (loadingProgress == null) return child;
+                                return Container(
+                                  color: Colors.grey.shade100,
+                                  height: 200,
+                                  width: double.infinity,
+                                  child: const Center(child: CircularProgressIndicator()),
+                                );
+                              },
                             ),
                           ),
                         ),
-                      Text(
-                        messageData['text'],
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                          color: isMe ? Colors.white : null,
+                      if (hasValidText)
+                        Text(
+                          text,
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            color: isMe ? Colors.white : null,
+                          ),
                         ),
-                      ),
+                      if (!hasValidImage && !hasValidText)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16.0),
+                          child: Text(
+                            'Unsupported or empty message',
+                            style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
+                          ),
+                        ),
                       if (messageData['audioUrl'] != null)
                         Container(
                           margin: const EdgeInsets.only(top: 4),
@@ -834,6 +863,8 @@ class _ChatPageState extends State<ChatPage> {
       onDocumentSelected: (file, fileName) => _sendDocumentMessage(file, fileName),
       chatId: widget.conversationId,
       userId: currentUser.uid,
+      onVoiceRecordStart: _startRecording,
+      onVoiceRecordStop: _stopRecording,
     );
   }
 

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:just_audio/just_audio.dart';
 import '../services/image_service.dart';
 import '../services/typing_status.dart';
 import 'package:file_picker/file_picker.dart';
@@ -10,6 +12,8 @@ class ChatInput extends StatefulWidget {
   final Function(File, String) onDocumentSelected;
   final String chatId;
   final String userId;
+  final VoidCallback? onVoiceRecordStart;
+  final VoidCallback? onVoiceRecordStop;
 
   const ChatInput({
     super.key,
@@ -18,6 +22,8 @@ class ChatInput extends StatefulWidget {
     required this.onDocumentSelected,
     required this.chatId,
     required this.userId,
+    this.onVoiceRecordStart,
+    this.onVoiceRecordStop,
   });
 
   @override
@@ -29,6 +35,38 @@ class _ChatInputState extends State<ChatInput> {
   final ImageService _imageService = ImageService();
   final TypingStatusService _typingService = TypingStatusService();
   bool _isTyping = false;
+  bool _isRecording = false;
+  late AudioPlayer _audioPlayer;
+  
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onTextChanged);
+    _audioPlayer = AudioPlayer();
+  }
+
+  Future<void> _playSound(String assetPath) async {
+    try {
+      await _audioPlayer.setAsset(assetPath);
+      await _audioPlayer.play();
+    } catch (e) {
+      // ignore sound errors
+    }
+  }
+
+  Future<void> _startRecording() async {
+    setState(() => _isRecording = true);
+    await Future.delayed(Duration.zero, () => HapticFeedback.heavyImpact());
+    await _playSound('assets/sounds/record_start.mp3');
+    if (widget.onVoiceRecordStart != null) widget.onVoiceRecordStart!();
+  }
+
+  Future<void> _stopRecording() async {
+    setState(() => _isRecording = false);
+    await Future.delayed(Duration.zero, () => HapticFeedback.heavyImpact());
+    await _playSound('assets/sounds/record_stop.mp3');
+    if (widget.onVoiceRecordStop != null) widget.onVoiceRecordStop!();
+  }
 
   Future<void> _pickImage() async {
     final File? image = await _imageService.pickImage();
@@ -64,13 +102,8 @@ class _ChatInputState extends State<ChatInput> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    _controller.addListener(_onTextChanged);
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final hasText = _controller.text.trim().isNotEmpty;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
       child: Row(
@@ -92,17 +125,80 @@ class _ChatInputState extends State<ChatInput> {
               ),
               minLines: 1,
               maxLines: 5,
+              onChanged: (val) => setState(() {}), // To update button
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.send),
-            onPressed: () {
-              if (_controller.text.trim().isNotEmpty) {
-                widget.onSendMessage(_controller.text.trim());
-                _controller.clear();
-              }
-            },
-          ),
+          hasText
+              ? IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: () async {
+                    if (_controller.text.trim().isNotEmpty) {
+                      await Future.delayed(Duration.zero, () => HapticFeedback.lightImpact());
+                      widget.onSendMessage(_controller.text.trim());
+                      _controller.clear();
+                      setState(() {});
+                    }
+                  },
+                )
+              : GestureDetector(
+                  onTap: () async {
+                    if (!_isRecording) {
+                      await _startRecording();
+                    } else {
+                      await _stopRecording();
+                    }
+                  },
+                  child: AnimatedContainer(
+                    duration: Duration(milliseconds: 200),
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _isRecording ? Colors.red.withOpacity(0.15) : Colors.transparent,
+                      boxShadow: _isRecording
+                          ? [
+                              BoxShadow(
+                                color: Colors.red.withOpacity(0.5),
+                                blurRadius: 16,
+                                spreadRadius: 2,
+                              ),
+                            ]
+                          : [],
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        if (_isRecording)
+                          TweenAnimationBuilder<double>(
+                            tween: Tween(begin: 1.0, end: 1.2),
+                            duration: Duration(milliseconds: 500),
+                            curve: Curves.easeInOut,
+                            builder: (context, value, child) {
+                              return Transform.scale(
+                                scale: value,
+                                child: Container(
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.red.withOpacity(0.4),
+                                  ),
+                                ),
+                              );
+                            },
+                            onEnd: () {
+                              if (_isRecording) setState(() {}); // repeat animation
+                            },
+                          ),
+                        Icon(
+                          _isRecording ? Icons.mic : Icons.mic_none,
+                          color: _isRecording ? Colors.red : null,
+                          size: 28,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
         ],
       ),
     );
@@ -113,6 +209,7 @@ class _ChatInputState extends State<ChatInput> {
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
     _typingService.setTypingStatus(widget.userId, widget.chatId, false);
+    _audioPlayer.dispose();
     super.dispose();
   }
 } 
