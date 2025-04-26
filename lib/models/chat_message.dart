@@ -5,6 +5,9 @@ class ChatMessage {
   final String senderId;
   final String? text;
   final String? imageUrl;
+  final String? documentUrl;
+  final String? documentName;
+  final String type; // 'text', 'image', 'document', etc.
   final DateTime timestamp;
   final String senderName;
 
@@ -13,8 +16,11 @@ class ChatMessage {
     required this.senderId,
     this.text,
     this.imageUrl,
+    this.documentUrl,
+    this.documentName,
     required this.timestamp,
     required this.senderName,
+    required this.type,
   });
 
   Map<String, dynamic> toMap() {
@@ -22,6 +28,9 @@ class ChatMessage {
       'senderId': senderId,
       'text': text,
       'imageUrl': imageUrl,
+      'documentUrl': documentUrl,
+      'documentName': documentName,
+      'type': type,
       'timestamp': timestamp.millisecondsSinceEpoch,
       'senderName': senderName,
     };
@@ -44,8 +53,11 @@ class ChatMessage {
       senderId: map['senderId'] ?? '',
       text: map['text'],
       imageUrl: map['imageUrl'],
+      documentUrl: map['documentUrl'],
+      documentName: map['documentName'],
+      type: map['type'] ?? 'text',
       timestamp: timestamp,
       senderName: map['senderName'] ?? '',
     );
   }
-} 
+}

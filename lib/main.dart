@@ -6,6 +6,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'services/presence_service.dart';
 import 'package:flutter_chat_mvp/pages/login_page.dart';
@@ -135,6 +136,13 @@ Future<void> main() async {
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   final messaging = FirebaseMessaging.instance;
   await messaging.requestPermission(alert: true, badge: true, sound: true);
+  final user = FirebaseAuth.instance.currentUser;
+  final token = await messaging.getToken();
+  if (user != null && token != null) {
+    FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+      'fcmToken': token,
+    });
+  }
   messaging.getToken().then((token) => print('FCM Token: $token'));
   FirebaseMessaging.onMessage.listen(_showLocalNotification);
   FirebaseMessaging.onMessageOpenedApp.listen((msg) {

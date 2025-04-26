@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import '../services/image_service.dart';
 import '../services/typing_status.dart';
+import 'package:file_picker/file_picker.dart';
 
 class ChatInput extends StatefulWidget {
   final Function(String) onSendMessage;
   final Function(File) onImageSelected;
+  final Function(File, String) onDocumentSelected;
   final String chatId;
   final String userId;
 
@@ -13,6 +15,7 @@ class ChatInput extends StatefulWidget {
     super.key,
     required this.onSendMessage,
     required this.onImageSelected,
+    required this.onDocumentSelected,
     required this.chatId,
     required this.userId,
   });
@@ -27,10 +30,25 @@ class _ChatInputState extends State<ChatInput> {
   final TypingStatusService _typingService = TypingStatusService();
   bool _isTyping = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _controller.addListener(_onTextChanged);
+  Future<void> _pickImage() async {
+    final File? image = await _imageService.pickImage();
+    if (image != null) {
+      widget.onImageSelected(image);
+    }
+  }
+
+  Future<void> _pickDocument() async {
+    // Use file_picker to select a document
+    try {
+      final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt']);
+      if (result != null && result.files.single.path != null) {
+        final file = File(result.files.single.path!);
+        final fileName = result.files.single.name;
+        widget.onDocumentSelected(file, fileName);
+      }
+    } catch (e) {
+      // Handle error or cancellation
+    }
   }
 
   void _onTextChanged() {
@@ -45,11 +63,10 @@ class _ChatInputState extends State<ChatInput> {
     }
   }
 
-  Future<void> _pickImage() async {
-    final File? image = await _imageService.pickImage();
-    if (image != null) {
-      widget.onImageSelected(image);
-    }
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onTextChanged);
   }
 
   @override
@@ -58,6 +75,10 @@ class _ChatInputState extends State<ChatInput> {
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
       child: Row(
         children: [
+          IconButton(
+            icon: const Icon(Icons.attach_file),
+            onPressed: _pickDocument,
+          ),
           IconButton(
             icon: const Icon(Icons.photo),
             onPressed: _pickImage,

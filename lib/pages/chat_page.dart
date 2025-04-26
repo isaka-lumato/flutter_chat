@@ -16,6 +16,10 @@ import 'profile_page.dart';
 import 'package:flutter_chat_mvp/services/user_status_service.dart';
 import 'package:flutter_chat_mvp/services/media_repository.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:open_file/open_file.dart';
+import '../services/document_service.dart';
+import '../widgets/chat_input.dart';
 
 class ChatPage extends StatefulWidget {
   final String conversationId;
@@ -314,6 +318,59 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  late final DocumentService _documentService = DocumentService();
+
+  /// Handle a document file selected from ChatInput or legacy UI
+  Future<void> _sendDocumentMessage(File file, String fileName) async {
+    try {
+      final uid = currentUser.uid;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sending document...')),
+        );
+      }
+      final downloadUrl = await _documentService.uploadDocument(
+        file: file,
+        conversationId: widget.conversationId,
+        uploadedBy: uid,
+      );
+      // Add document message to Firestore
+      await _messages.add({
+        'documentUrl': downloadUrl,
+        'documentName': fileName,
+        'sender': uid,
+        'timestamp': FieldValue.serverTimestamp(),
+        'type': 'document',
+        'conversationId': widget.conversationId,
+        'reactions': {},
+      });
+      // Update conversation last message and unread counts
+      final convoDoc = await _conversation.get();
+      final convoData = convoDoc.data() as Map<String, dynamic>? ?? {};
+      final participants = List<String>.from(convoData['participants'] ?? []);
+      final updateData = {
+        'lastMessage': fileName,
+        'lastMessageTimestamp': FieldValue.serverTimestamp(),
+      };
+      for (var p in participants) {
+        if (p == uid) {
+          updateData['unreadCounts.$p'] = 0;
+        } else {
+          updateData['unreadCounts.$p'] = FieldValue.increment(1);
+        }
+      }
+      await _conversation.update(updateData);
+    } catch (e, stackTrace) {
+      print('Error sending document: $e');
+      print('Stack trace: $stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send document: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -427,6 +484,34 @@ class _ChatPageState extends State<ChatPage> {
     bool isMe,
     ThemeData theme,
   ) {
+    // Document message UI
+    if ((messageData['type'] ?? '') == 'document') {
+      final docName = messageData['documentName'] ?? 'Document';
+      final docUrl = messageData['documentUrl'];
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+        child: Align(
+          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+          child: Card(
+            color: isMe ? theme.colorScheme.primary.withOpacity(0.1) : theme.colorScheme.surface,
+            child: ListTile(
+              leading: const Icon(Icons.insert_drive_file, color: Colors.blueAccent),
+              title: Text(docName, style: theme.textTheme.bodyMedium),
+              subtitle: Text('Document', style: theme.textTheme.bodySmall),
+              trailing: IconButton(
+                icon: const Icon(Icons.download_rounded),
+                onPressed: () async {
+                  if (docUrl != null) {
+                    await OpenFile.open(docUrl);
+                  }
+                },
+                tooltip: 'Open/Download',
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     if (_deletedMessagesForMe.contains(messageData['id'])) {
       return const SizedBox();
     }
@@ -559,12 +644,12 @@ class _ChatPageState extends State<ChatPage> {
                             ),
                           ),
                         ),
-                        Text(
-                          messageData['text'],
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: isMe ? Colors.white : null,
-                          ),
+                      Text(
+                        messageData['text'],
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: isMe ? Colors.white : null,
                         ),
+                      ),
                       if (messageData['audioUrl'] != null)
                         Container(
                           margin: const EdgeInsets.only(top: 4),
@@ -743,6 +828,68 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _buildMessageInput() {
+    return ChatInput(
+      onSendMessage: (text) => _sendMessage(text),
+      onImageSelected: (file) => _pickImage(file),
+      onDocumentSelected: (file, fileName) => _sendDocumentMessage(file, fileName),
+      chatId: widget.conversationId,
+      userId: currentUser.uid,
+    );
+  }
+
+  /// Handle an image file selected from ChatInput or legacy UI
+  Future<void> _pickImage(File file) async {
+    try {
+      final uid = currentUser.uid;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sending image...')),
+        );
+      }
+      final mediaRepo = Provider.of<MediaRepository>(context, listen: false);
+      final downloadUrl = await mediaRepo.uploadImage(
+        file: file,
+        conversationId: widget.conversationId,
+        uploadedBy: uid,
+      );
+      // Add image message
+      await _messages.add({
+        'imageUrl': downloadUrl,
+        'sender': uid,
+        'timestamp': FieldValue.serverTimestamp(),
+        'type': 'image',
+        'conversationId': widget.conversationId,
+        'reactions': {},
+      });
+      // Update conversation
+      final doc = await _conversation.get();
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final participants = List<String>.from(data['participants'] ?? []);
+      final updateData = {
+        'lastMessage': '(Image)',
+        'lastMessageTimestamp': FieldValue.serverTimestamp(),
+      };
+      for (var participant in participants) {
+        if (participant == uid) {
+          updateData['unreadCounts.$participant'] = 0;
+        } else {
+          updateData['unreadCounts.$participant'] = FieldValue.increment(1);
+        }
+      }
+      await _conversation.update(updateData);
+    } catch (e, stackTrace) {
+      print('Error sending image: $e');
+      print('Stack trace: $stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send image: $e')),
+        );
+      }
+    }
+  }
+
+  // Legacy input UI (if needed)
+  Widget _buildMessageInputLegacy() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
@@ -759,7 +906,20 @@ class _ChatPageState extends State<ChatPage> {
         children: [
           IconButton(
             icon: const Icon(Icons.attach_file),
-            onPressed: _pickImage,
+            onPressed: () async {
+              // Document picker for legacy UI
+              FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt']);
+              if (result != null && result.files.single.path != null) {
+                final file = File(result.files.single.path!);
+                final fileName = result.files.single.name;
+                _sendDocumentMessage(file, fileName);
+              }
+            },
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          IconButton(
+            icon: const Icon(Icons.photo),
+            onPressed: () { _pickAndSendImage(); },
             color: Theme.of(context).colorScheme.primary,
           ),
           Expanded(
@@ -789,6 +949,12 @@ class _ChatPageState extends State<ChatPage> {
                   border: InputBorder.none,
                   isDense: true,
                 ),
+                onSubmitted: (text) {
+                  if (text.trim().isNotEmpty) {
+                    _sendMessage();
+                    _messageController.clear();
+                  }
+                },
               ),
             ),
           ),
@@ -800,7 +966,12 @@ class _ChatPageState extends State<ChatPage> {
             ),
             child: IconButton(
               icon: const Icon(Icons.send_rounded),
-              onPressed: _sendMessage,
+              onPressed: () {
+                if (_messageController.text.trim().isNotEmpty) {
+                  _sendMessage();
+                  _messageController.clear();
+                }
+              },
               color: Colors.white,
               constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
             ),
@@ -823,7 +994,7 @@ class _ChatPageState extends State<ChatPage> {
                     ],
                   )
                 : const Icon(Icons.mic),
-              onPressed: _isRecording ? _stopRecording : _startRecording,
+              onPressed: _isRecording ? () => _stopRecording() : () => _startRecording(),
               color: Colors.white,
               constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             ),
@@ -833,177 +1004,16 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  Future<void> _sendMessage() async {
-    final text = _messageController.text.trim();
-    if (text.isEmpty) return;
-    _messageController.clear();
-    try {
-      final uid = currentUser.uid;
-      await _messages.add({
-        'text': text,
-        'sender': uid,
-        'timestamp': FieldValue.serverTimestamp(),
-        'conversationId': widget.conversationId,
-        'reactions': {},
-      });
-      // Update conversation with last message and unread counts
-      final doc = await _conversation.get();
-      final data = doc.data() as Map<String, dynamic>? ?? {};
-      final participants = List<String>.from(data['participants'] ?? []);
-      final Map<String, dynamic> updateData = {
-        'lastMessage': text,
-        'lastMessageTimestamp': FieldValue.serverTimestamp(),
-      };
-      for (var participant in participants) {
-        if (participant == uid) {
-          updateData['unreadCounts.$participant'] = 0;
-        } else {
-          updateData['unreadCounts.$participant'] = FieldValue.increment(1);
-        }
-      }
-      await _conversation.update(updateData);
-    } catch (e) {
-      print('Error sending message: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send message: $e')),
-        );
-      }
+  /// Convenience method for legacy UI to pick and send an image
+  Future<void> _pickAndSendImage() async {
+    final XFile? picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked != null) {
+      final file = File(picked.path);
+      await _pickImage(file);
     }
   }
 
-  Future<void> _pickImage() async {
-    try {
-      // Check for appropriate storage permissions based on Android version
-      bool permissionGranted = false;
-      
-      if (Platform.isAndroid) {
-        // For Android 13+ (SDK 33+), use more specific media permissions
-        if (await Permission.photos.status.isGranted) {
-          permissionGranted = true;
-        } else {
-          final result = await Permission.photos.request();
-          permissionGranted = result.isGranted;
-        }
-      } else {
-        // For lower Android versions or other platforms, use general storage
-        if (await Permission.storage.status.isGranted) {
-          permissionGranted = true;
-        } else {
-          final result = await Permission.storage.request();
-          permissionGranted = result.isGranted;
-        }
-      }
-      
-      if (!permissionGranted) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Storage permission is required to pick images'),
-              backgroundColor: Colors.red,
-              duration: Duration(seconds: 3),
-            ),
-          );
-        }
-        return;
-      }
-
-      final ImagePicker picker = ImagePicker();
-      print('DEBUG: Opening image picker...');
-      
-      final XFile? image = await picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 800, // Reduced size for base64 encoding
-        maxHeight: 800, // Reduced size for base64 encoding
-        imageQuality: 70,
-      );
-
-      print('DEBUG: Image picked: ${image?.path}');
-
-      if (image != null) {
-        // Check file size
-        final file = File(image.path);
-        final sizeInBytes = await file.length();
-        final sizeInMb = sizeInBytes / (1024 * 1024);
-        
-        if (sizeInMb > 1) { // Reduced to 1MB for base64 approach
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Image size must be less than 1MB for this demo version')),
-            );
-          }
-          return;
-        }
-        
-        // Show loading dialog
-        if (!mounted) return;
-        bool dialogShown = false;
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (BuildContext context) => const AlertDialog(
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text('Processing image...'),
-              ],
-            ),
-          ),
-        );
-        dialogShown = true;
-        
-        try {
-          final currentUser = _auth.currentUser;
-          if (currentUser == null) {
-            throw Exception('User not logged in');
-          }
-
-          // Use MediaRepository to upload image
-          final mediaRepository = Provider.of<MediaRepository>(context, listen: false);
-          final downloadUrl = await mediaRepository.uploadImage(
-            file: file,
-            conversationId: widget.conversationId,
-            uploadedBy: currentUser.uid,
-          );
-          await _messages.add({
-            'text': '(Image)',
-            'imageUrl': downloadUrl,
-            'imageName': file.path.split('/').last,
-            'sender': currentUser.uid,
-            'timestamp': FieldValue.serverTimestamp(),
-            'conversationId': widget.conversationId,
-            'reactions': {},
-          });
-          print('DEBUG: Image shared successfully using MediaRepository');
-        } catch (e) {
-          print('ERROR: Failed to process and send image: $e');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Failed to send image: $e'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        } finally {
-          // Hide dialog
-          if (mounted && dialogShown && context.mounted) {
-            Navigator.of(context).pop();
-          }
-        }
-      }
-    } catch (e) {
-      print('ERROR: Failed to pick image: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to pick image: $e')),
-        );
-      }
-    }
-  }
-
+  /// Show image in full screen dialog
   void _showFullScreenImage(String imageUrl) {
     showDialog(
       context: context,
@@ -1049,6 +1059,48 @@ class _ChatPageState extends State<ChatPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _sendMessage([String? text]) async {
+    final content = (text?.trim()) ?? _messageController.text.trim();
+    if (content.isEmpty) return;
+    // clear legacy input controller
+    if (text == null) {
+      _messageController.clear();
+    }
+    try {
+      final uid = currentUser.uid;
+      await _messages.add({
+        'text': content,
+        'sender': uid,
+        'timestamp': FieldValue.serverTimestamp(),
+        'conversationId': widget.conversationId,
+        'reactions': {},
+      });
+      // Update conversation with last message and unread counts
+      final doc = await _conversation.get();
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final participants = List<String>.from(data['participants'] ?? []);
+      final Map<String, dynamic> updateData = {
+        'lastMessage': content,
+        'lastMessageTimestamp': FieldValue.serverTimestamp(),
+      };
+      for (var participant in participants) {
+        if (participant == uid) {
+          updateData['unreadCounts.$participant'] = 0;
+        } else {
+          updateData['unreadCounts.$participant'] = FieldValue.increment(1);
+        }
+      }
+      await _conversation.update(updateData);
+    } catch (e) {
+      print('Error sending message: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send message: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _deleteMessage(String messageId) async {
