@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -11,15 +9,15 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:audio_session/audio_session.dart';
-import 'package:http/http.dart' as http;
+
 import 'profile_page.dart';
 import 'package:flutter_chat_mvp/services/user_status_service.dart';
 import 'package:flutter_chat_mvp/services/media_repository.dart';
 import 'package:provider/provider.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:open_file/open_file.dart';
 import '../services/document_service.dart';
 import '../widgets/chat_input.dart';
+import '../widgets/audio_message_widget.dart';
 
 class ChatPage extends StatefulWidget {
   final String conversationId;
@@ -38,6 +36,63 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  // Controllers and references
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  late CollectionReference<Map<String, dynamic>> _messages;
+  late DocumentReference<Map<String, dynamic>> _conversation;
+  final Set<String> _deletedMessagesForMe = {};
+
+  // --- Voice message playback state ---
+  final FlutterSoundPlayer _audioPlayer = FlutterSoundPlayer();
+  String? _currentlyPlayingId;
+  bool _audioPlayerInited = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _messages = FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(widget.conversationId)
+        .collection('messages');
+    _conversation = FirebaseFirestore.instance.collection('conversations').doc(widget.conversationId);
+    _audioPlayer.openPlayer().then((_) {
+      setState(() {
+        _audioPlayerInited = true;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.closePlayer();
+    super.dispose();
+  }
+
+  void _handlePlayPauseVoice(String messageId, String audioUrl) async {
+    if (!_audioPlayerInited) return;
+    if (_currentlyPlayingId == messageId && _audioPlayer.isPlaying) {
+      await _audioPlayer.pausePlayer();
+      setState(() {});
+      return;
+    }
+    if (_currentlyPlayingId != messageId) {
+      await _audioPlayer.stopPlayer();
+      setState(() {
+        _currentlyPlayingId = messageId;
+      });
+    }
+    await _audioPlayer.startPlayer(
+      fromURI: audioUrl,
+      codec: Codec.aacADTS,
+      whenFinished: () {
+        setState(() {
+          _currentlyPlayingId = null;
+        });
+      },
+    );
+    setState(() {}); // update UI state after playback starts
+  }
+
   String _formatLastSeen(DateTime lastSeen) {
     final now = DateTime.now();
     final diff = now.difference(lastSeen);
@@ -47,69 +102,15 @@ class _ChatPageState extends State<ChatPage> {
     return '${lastSeen.year}-${lastSeen.month.toString().padLeft(2, '0')}-${lastSeen.day.toString().padLeft(2, '0')} ${lastSeen.hour.toString().padLeft(2, '0')}:${lastSeen.minute.toString().padLeft(2, '0')}';
   }
 
-  final TextEditingController _messageController = TextEditingController();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  late User currentUser;
-  late final CollectionReference _messages;
-  late final DocumentReference _conversation;
-
   // Voice message recording
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final FlutterSoundPlayer _player = FlutterSoundPlayer();
+
   bool _isRecorderInitialized = false;
   bool _isRecording = false;
   String _recordingPath = '';
   Timer? _recordingTimer;
   int _recordingDuration = 0;
-  final Map<String, FlutterSoundPlayer> _audioPlayers = {};
-  final Set<String> _deletedMessagesForMe = {};
 
-  @override
-  void dispose() {
-    _messageController.dispose();
-    // Cleanup audio resources
-    _recorder.closeRecorder();
-    _player.closePlayer();
-    // Close all active players
-    for (final player in _audioPlayers.values) {
-      player.closePlayer();
-    }
-    super.dispose();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    currentUser = _auth.currentUser!;
-    _conversation = FirebaseFirestore.instance.collection('conversations').doc(widget.conversationId);
-    _messages = _conversation.collection('messages');
-    // Reset unread message count for this user
-    _conversation.update({'unreadCounts.${currentUser.uid}': 0});
-    // Initialize audio recorder
-    _initRecorder();
-    // Initialize audio player
-    _initPlayer();
-    // In-app notification banner for incoming messages
-    _messages.orderBy('timestamp', descending: false)
-      .snapshots()
-      .skip(1)
-      .listen((snapshot) {
-        for (var change in snapshot.docChanges) {
-          if (change.type == DocumentChangeType.added) {
-            final data = change.doc.data() as Map<String, dynamic>;
-            if (data['sender'] != currentUser.uid && mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('${widget.otherUserName}: ${data['text']}'),
-                  duration: const Duration(seconds: 3),
-                ),
-              );
-            }
-          }
-        }
-      });
-  }
-  
   Future<void> _initRecorder() async {
     try {
       final status = await Permission.microphone.request();
@@ -146,17 +147,7 @@ class _ChatPageState extends State<ChatPage> {
       }
     }
   }
-  
-  Future<void> _initPlayer() async {
-    try {
-      await _player.openPlayer();
-    } catch (e) {
-      print('Error initializing player: $e');
-    }
-  }
 
-
-  // Voice recording methods
   Future<void> _startRecording() async {
     if (!_isRecorderInitialized) {
       await _initRecorder();
@@ -179,13 +170,6 @@ class _ChatPageState extends State<ChatPage> {
         _recordingDuration = 0;
       });
       
-      // Start a timer to track recording duration
-      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        setState(() {
-          _recordingDuration++;
-        });
-      });
-      
     } catch (e) {
       print('Error starting recording: $e');
       if (mounted) {
@@ -198,30 +182,25 @@ class _ChatPageState extends State<ChatPage> {
   
   Future<void> _stopRecording() async {
     if (!_isRecording) return;
-    
     try {
-      // Stop the timer
-      _recordingTimer?.cancel();
-      _recordingTimer = null;
-      
-      // Stop recording
       await _recorder.stopRecorder();
-      
-      setState(() {
-        _isRecording = false;
+      setState(() => _isRecording = false);
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) return;
+      // Add pending voice message
+      final tempRef = await _messages!.add({
+        'sender': currentUser.uid,
+        'timestamp': FieldValue.serverTimestamp(),
+        'text': '(Voice message)',
+        'type': 'voice',
+        'audioUrl': null,
+        'pending': true,
+        'conversationId': widget.conversationId,
+        'audioName': _recordingPath.split('/').last,
+        'audioDuration': _recordingDuration,
+        'reactions': {},
       });
-      
-      // Send the recorded audio if it's at least 1 second long
-      if (_recordingDuration >= 1) {
-        await _sendVoiceMessage(_recordingPath);
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Recording too short')),
-          );
-        }
-      }
-      
+      _uploadAndFinalizeVoiceMessage(_recordingPath, tempRef);
     } catch (e) {
       print('Error stopping recording: $e');
       if (mounted) {
@@ -231,44 +210,45 @@ class _ChatPageState extends State<ChatPage> {
       }
     }
   }
-  
-  Future<void> _sendVoiceMessage(String filePath) async {
+
+  Future<void> _uploadAndFinalizeVoiceMessage(String filePath, DocumentReference tempMessageRef) async {
     try {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sending voice message...')),
-        );
-      }
       final File file = File(filePath);
       final currentUser = _auth.currentUser;
-      if (currentUser == null) {
-        throw Exception('User not logged in');
-      }
-      // Use MediaRepository to upload audio
+      if (currentUser == null) return;
       final mediaRepository = Provider.of<MediaRepository>(context, listen: false);
       final downloadUrl = await mediaRepository.uploadAudio(
         file: file,
         conversationId: widget.conversationId,
         uploadedBy: currentUser.uid,
       );
-      await _messages.add({
-        'sender': currentUser.uid,
-        'timestamp': FieldValue.serverTimestamp(),
-        'text': '(Voice message)',
-        'audioUrl': downloadUrl,
-        'audioName': file.path.split('/').last,
-        'audioDuration': _recordingDuration,
-        'conversationId': widget.conversationId,
-        'reactions': {},
-      });
-      await _conversation.update({
-        'lastMessage': '(Voice message)',
-        'lastMessageTimestamp': FieldValue.serverTimestamp(),
-      });
+      if (tempMessageRef != null) {
+        await tempMessageRef.update({
+          'audioUrl': downloadUrl,
+          'pending': false,
+        });
+        // Update conversation with last voice message
+        final convoDoc = await _conversation.get();
+        final convoData = convoDoc.data() as Map<String, dynamic>? ?? {};
+        final participants = List<String>.from(convoData['participants'] ?? []);
+        final convUpdate = <String, dynamic>{
+          'lastMessage': '(Voice)',
+          'lastMessageTimestamp': FieldValue.serverTimestamp(),
+        };
+        for (var p in participants) {
+          if (p == _auth.currentUser?.uid) {
+            convUpdate['unreadCounts.$p'] = 0;
+          } else {
+            convUpdate['unreadCounts.$p'] = FieldValue.increment(1);
+          }
+        }
+        await _conversation.update(convUpdate);
+      }
       await file.delete();
     } catch (e) {
-      print('Error sending voice message: $e');
-      if (mounted) {
+      print('Error uploading voice message: $e');
+      if (mounted && tempMessageRef != null) {
+        await tempMessageRef.update({'pending': false, 'uploadFailed': true});
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to send voice message: $e')),
         );
@@ -276,54 +256,12 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
   
-  // Audio playback methods
-  Future<void> _playVoiceMessage(String messageId, String audioUrl) async {
-    try {
-      // Check if we already have a player for this message
-      if (!_audioPlayers.containsKey(messageId)) {
-        // Create a new player
-        final player = FlutterSoundPlayer();
-        await player.openPlayer();
-        _audioPlayers[messageId] = player;
-      }
-      
-      final player = _audioPlayers[messageId]!;
-      
-      // If currently playing, stop it
-      if (player.isPlaying) {
-        await player.stopPlayer();
-        setState(() {});
-        return;
-      }
-      
-      // Play the audio
-      await player.startPlayer(
-        fromURI: audioUrl,
-        codec: Codec.aacADTS,
-        whenFinished: () {
-          setState(() {});
-        },
-      );
-      
-      // Force UI update to show the playing state
-      setState(() {});
-      
-    } catch (e) {
-      print('Error playing voice message: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to play voice message: $e')),
-        );
-      }
-    }
-  }
-
   late final DocumentService _documentService = DocumentService();
 
   /// Handle a document file selected from ChatInput or legacy UI
   Future<void> _sendDocumentMessage(File file, String fileName) async {
     try {
-      final uid = currentUser.uid;
+      final uid = _auth.currentUser!.uid;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Sending document...')),
@@ -335,7 +273,7 @@ class _ChatPageState extends State<ChatPage> {
         uploadedBy: uid,
       );
       // Add document message to Firestore
-      await _messages.add({
+      await _messages!.add({
         'documentUrl': downloadUrl,
         'documentName': fileName,
         'sender': uid,
@@ -345,7 +283,7 @@ class _ChatPageState extends State<ChatPage> {
         'reactions': {},
       });
       // Update conversation last message and unread counts
-      final convoDoc = await _conversation.get();
+      final convoDoc = await _conversation!.get();
       final convoData = convoDoc.data() as Map<String, dynamic>? ?? {};
       final participants = List<String>.from(convoData['participants'] ?? []);
       final updateData = {
@@ -359,7 +297,7 @@ class _ChatPageState extends State<ChatPage> {
           updateData['unreadCounts.$p'] = FieldValue.increment(1);
         }
       }
-      await _conversation.update(updateData);
+      await _conversation!.update(updateData);
     } catch (e, stackTrace) {
       print('Error sending document: $e');
       print('Stack trace: $stackTrace');
@@ -369,6 +307,15 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
     }
+  }
+
+  /// Format duration in seconds to MM:SS
+  String _formatDuration(int seconds) {
+    final duration = Duration(seconds: seconds);
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes);
+    final secs = twoDigits(duration.inSeconds % 60);
+    return '$minutes:$secs';
   }
 
   @override
@@ -479,6 +426,160 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  Widget _buildAvatar(String name) {
+    return CircleAvatar(
+      radius: 16,
+      backgroundColor: Theme.of(context).colorScheme.primary,
+      child: Text(
+        name[0].toUpperCase(),
+        style: const TextStyle(color: Colors.white, fontSize: 14),
+      ),
+    );
+  }
+
+  Widget _buildReactions(Map reactions) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: reactions.entries.map((entry) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              children: [
+                Text(entry.key),
+                const SizedBox(width: 4),
+                Text(
+                  (entry.value as List).length.toString(),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  void _showReactionPicker(String messageId) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        height: 200,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'React to message',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 16,
+              children: ['❤️', '👍', '👎', '😂', '😮', '😢', '🎉', '🤔'].map((emoji) {
+                return InkWell(
+                  onTap: () {
+                    _addReaction(messageId, emoji);
+                    Navigator.pop(context);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Text(
+                      emoji,
+                      style: const TextStyle(fontSize: 24),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addReaction(String messageId, String emoji) async {
+    final userId = _auth.currentUser?.uid;
+    if (userId == null) return;
+
+    final messageRef = _messages!.doc(messageId);
+    final message = await messageRef.get();
+    final reactions = (message.data() as Map<String, dynamic>)['reactions'] ?? {};
+    
+    if (reactions[emoji] == null) {
+      reactions[emoji] = [userId];
+    } else {
+      final List userList = reactions[emoji];
+      if (userList.contains(userId)) {
+        userList.remove(userId);
+        if (userList.isEmpty) {
+          reactions.remove(emoji);
+        }
+      } else {
+        userList.add(userId);
+      }
+    }
+
+    await messageRef.update({'reactions': reactions});
+  }
+
+  /// Show image in full screen dialog
+  void _showFullScreenImage(String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            InteractiveViewer(
+              panEnabled: true,
+              minScale: 0.5,
+              maxScale: 4,
+              child: Image.network(
+                imageUrl,
+                fit: BoxFit.contain,
+              ),
+            ),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: AppBar(
+                backgroundColor: Colors.black54,
+                elevation: 0,
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.download, color: Colors.white),
+                    onPressed: () => Provider.of<MediaRepository>(context, listen: false).saveImageToGallery(imageUrl, context: context),
+                    tooltip: 'Save to gallery',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.share, color: Colors.white),
+                    onPressed: () => Provider.of<MediaRepository>(context, listen: false).shareImage(imageUrl, context: context),
+                    tooltip: 'Share image',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Main message builder ---
   Widget _buildMessage(
     Map<String, dynamic> messageData,
     bool isMe,
@@ -519,6 +620,22 @@ class _ChatPageState extends State<ChatPage> {
     }
     if (_deletedMessagesForMe.contains(messageData['id'])) {
       return const SizedBox();
+    }
+    // Voice message UI: use dedicated widget for playback controls
+    if (messageData['type'] == 'voice') {
+      final isPlaying = _currentlyPlayingId == messageData['id'] && _audioPlayer.isPlaying;
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+        child: Align(
+          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+          child: Card(
+            color: isMe ? theme.colorScheme.primary : theme.colorScheme.surface,
+            child: AudioMessageWidget(
+              audioUrl: messageData['audioUrl'] as String,
+            ),
+          ),
+        ),
+      );
     }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
@@ -679,7 +796,7 @@ class _ChatPageState extends State<ChatPage> {
                             style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
                           ),
                         ),
-                      if (messageData['audioUrl'] != null)
+                      if (messageData.containsKey('pending') && (messageData['audioUrl'] == null || messageData['pending'] == true))
                         Container(
                           margin: const EdgeInsets.only(top: 4),
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -690,43 +807,29 @@ class _ChatPageState extends State<ChatPage> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              IconButton(
-                                icon: Icon(
-                                  _audioPlayers.containsKey(messageData['id']) &&
-                                          _audioPlayers[messageData['id']]!.isPlaying
-                                      ? Icons.pause
-                                      : Icons.play_arrow,
-                                ),
-                                color: Theme.of(context).primaryColor,
-                                onPressed: () => _playVoiceMessage(
-                                    messageData['id'], messageData['audioUrl']),
-                              ),
-                              Expanded(
-                                child: Container(
-                                  height: 30,
-                                  decoration: BoxDecoration(
-                                    color: isMe ? Colors.blue.shade200 : Colors.grey.shade300,
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(20),
-                                    child: CustomPaint(
-                                      painter: WaveformPainter(
-                                        isPlaying: _audioPlayers.containsKey(messageData['id']) && 
-                                                  _audioPlayers[messageData['id']]!.isPlaying,
-                                        color: isMe ? Colors.blue.shade700 : Colors.grey.shade600,
-                                      ),
-                                      size: const Size(double.infinity, 30),
-                                    ),
-                                  ),
-                                ),
-                              ),
                               const SizedBox(width: 8),
+                              const CircularProgressIndicator(strokeWidth: 2),
+                              const SizedBox(width: 12),
                               Text(
-                                '${messageData['audioDuration'] ?? 0}s',
-                                style: theme.textTheme.bodySmall,
+                                messageData['uploadFailed'] == true
+                                    ? 'Failed to upload voice note'
+                                    : 'Uploading voice note...',
                               ),
+                              if (messageData['uploadFailed'] == true)
+                                IconButton(
+                                  icon: const Icon(Icons.refresh),
+                                  onPressed: () {
+                                    // Optionally implement retry logic here
+                                  },
+                                ),
                             ],
+                          ),
+                        )
+                        else if (messageData['type'] == 'voice' && messageData['audioUrl'] != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: AudioMessageWidget(
+                            audioUrl: messageData['audioUrl'] as String,
                           ),
                         ),
                     ],
@@ -751,118 +854,13 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  Widget _buildReactions(Map reactions) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: reactions.entries.map((entry) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Row(
-              children: [
-                Text(entry.key),
-                const SizedBox(width: 4),
-                Text(
-                  (entry.value as List).length.toString(),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  void _showReactionPicker(String messageId) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => Container(
-        height: 200,
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'React to message',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 16,
-              children: ['❤️', '👍', '👎', '😂', '😮', '😢', '🎉', '🤔'].map((emoji) {
-                return InkWell(
-                  onTap: () {
-                    _addReaction(messageId, emoji);
-                    Navigator.pop(context);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Text(
-                      emoji,
-                      style: const TextStyle(fontSize: 24),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _addReaction(String messageId, String emoji) async {
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) return;
-
-    final messageRef = _messages.doc(messageId);
-    final message = await messageRef.get();
-    final reactions = (message.data() as Map<String, dynamic>)['reactions'] ?? {};
-    
-    if (reactions[emoji] == null) {
-      reactions[emoji] = [userId];
-    } else {
-      final List userList = reactions[emoji];
-      if (userList.contains(userId)) {
-        userList.remove(userId);
-        if (userList.isEmpty) {
-          reactions.remove(emoji);
-        }
-      } else {
-        userList.add(userId);
-      }
-    }
-
-    await messageRef.update({'reactions': reactions});
-  }
-
-  Widget _buildAvatar(String name) {
-    return CircleAvatar(
-      radius: 16,
-      backgroundColor: Theme.of(context).colorScheme.primary,
-      child: Text(
-        name[0].toUpperCase(),
-        style: const TextStyle(color: Colors.white, fontSize: 14),
-      ),
-    );
-  }
-
   Widget _buildMessageInput() {
     return ChatInput(
       onSendMessage: (text) => _sendMessage(text),
       onImageSelected: (file) => _pickImage(file),
       onDocumentSelected: (file, fileName) => _sendDocumentMessage(file, fileName),
       chatId: widget.conversationId,
-      userId: currentUser.uid,
+      userId: _auth.currentUser?.uid ?? '',
       onVoiceRecordStart: _startRecording,
       onVoiceRecordStop: _stopRecording,
     );
@@ -871,7 +869,7 @@ class _ChatPageState extends State<ChatPage> {
   /// Handle an image file selected from ChatInput or legacy UI
   Future<void> _pickImage(File file) async {
     try {
-      final uid = currentUser.uid;
+      final uid = _auth.currentUser!.uid;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Sending image...')),
@@ -884,7 +882,7 @@ class _ChatPageState extends State<ChatPage> {
         uploadedBy: uid,
       );
       // Add image message
-      await _messages.add({
+      await _messages!.add({
         'imageUrl': downloadUrl,
         'sender': uid,
         'timestamp': FieldValue.serverTimestamp(),
@@ -893,7 +891,7 @@ class _ChatPageState extends State<ChatPage> {
         'reactions': {},
       });
       // Update conversation
-      final doc = await _conversation.get();
+      final doc = await _conversation!.get();
       final data = doc.data() as Map<String, dynamic>? ?? {};
       final participants = List<String>.from(data['participants'] ?? []);
       final updateData = {
@@ -907,7 +905,7 @@ class _ChatPageState extends State<ChatPage> {
           updateData['unreadCounts.$participant'] = FieldValue.increment(1);
         }
       }
-      await _conversation.update(updateData);
+      await _conversation!.update(updateData);
     } catch (e, stackTrace) {
       print('Error sending image: $e');
       print('Stack trace: $stackTrace');
@@ -919,122 +917,6 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  // Legacy input UI (if needed)
-  Widget _buildMessageInputLegacy() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        boxShadow: [
-          BoxShadow(
-            offset: const Offset(0, -2),
-            blurRadius: 6,
-            color: Colors.black.withOpacity(0.08),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.attach_file),
-            onPressed: () async {
-              // Document picker for legacy UI
-              FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt']);
-              if (result != null && result.files.single.path != null) {
-                final file = File(result.files.single.path!);
-                final fileName = result.files.single.name;
-                _sendDocumentMessage(file, fileName);
-              }
-            },
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          IconButton(
-            icon: const Icon(Icons.photo),
-            onPressed: () { _pickAndSendImage(); },
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
-                ),
-              ),
-              child: TextField(
-                controller: _messageController,
-                maxLines: null,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: InputDecoration(
-                  hintText: 'Type a message...',
-                  hintStyle: TextStyle(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.onSurface.withOpacity(0.6),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  border: InputBorder.none,
-                  isDense: true,
-                ),
-                onSubmitted: (text) {
-                  if (text.trim().isNotEmpty) {
-                    _sendMessage();
-                    _messageController.clear();
-                  }
-                },
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary,
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.send_rounded),
-              onPressed: () {
-                if (_messageController.text.trim().isNotEmpty) {
-                  _sendMessage();
-                  _messageController.clear();
-                }
-              },
-              color: Colors.white,
-              constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            decoration: BoxDecoration(
-              color: _isRecording 
-                ? Colors.red 
-                : Theme.of(context).colorScheme.primary,
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              icon: _isRecording 
-                ? Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.stop, size: 20),
-                      Text(" ${_recordingDuration}s", style: const TextStyle(fontSize: 10, color: Colors.white))
-                    ],
-                  )
-                : const Icon(Icons.mic),
-              onPressed: _isRecording ? () => _stopRecording() : () => _startRecording(),
-              color: Colors.white,
-              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   /// Convenience method for legacy UI to pick and send an image
   Future<void> _pickAndSendImage() async {
     final XFile? picked = await ImagePicker().pickImage(source: ImageSource.gallery);
@@ -1044,64 +926,13 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  /// Show image in full screen dialog
-  void _showFullScreenImage(String imageUrl) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            InteractiveViewer(
-              panEnabled: true,
-              minScale: 0.5,
-              maxScale: 4,
-              child: Image.network(
-                imageUrl,
-                fit: BoxFit.contain,
-              ),
-            ),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: AppBar(
-                backgroundColor: Colors.black54,
-                elevation: 0,
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.download, color: Colors.white),
-                    onPressed: () => Provider.of<MediaRepository>(context, listen: false).saveImageToGallery(imageUrl, context: context),
-                    tooltip: 'Save to gallery',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.share, color: Colors.white),
-                    onPressed: () => Provider.of<MediaRepository>(context, listen: false).shareImage(imageUrl, context: context),
-                    tooltip: 'Share image',
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Future<void> _sendMessage([String? text]) async {
-    final content = (text?.trim()) ?? _messageController.text.trim();
+    final content = (text?.trim()) ?? '';
     if (content.isEmpty) return;
-    // clear legacy input controller
-    if (text == null) {
-      _messageController.clear();
-    }
     try {
-      final uid = currentUser.uid;
-      await _messages.add({
+      final uid = _auth.currentUser!.uid;
+      if (uid.isEmpty || _messages == null) return;
+      await _messages!.add({
         'text': content,
         'sender': uid,
         'timestamp': FieldValue.serverTimestamp(),
@@ -1109,10 +940,10 @@ class _ChatPageState extends State<ChatPage> {
         'reactions': {},
       });
       // Update conversation with last message and unread counts
-      final doc = await _conversation.get();
+      final doc = await _conversation!.get();
       final data = doc.data() as Map<String, dynamic>? ?? {};
       final participants = List<String>.from(data['participants'] ?? []);
-      final Map<String, dynamic> updateData = {
+      final updateData = {
         'lastMessage': content,
         'lastMessageTimestamp': FieldValue.serverTimestamp(),
       };
@@ -1123,7 +954,7 @@ class _ChatPageState extends State<ChatPage> {
           updateData['unreadCounts.$participant'] = FieldValue.increment(1);
         }
       }
-      await _conversation.update(updateData);
+      await _conversation!.update(updateData);
     } catch (e) {
       print('Error sending message: $e');
       if (mounted) {
@@ -1136,7 +967,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _deleteMessage(String messageId) async {
     try {
-      await _messages.doc(messageId).delete();
+      await _messages!.doc(messageId).delete();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Message deleted')),

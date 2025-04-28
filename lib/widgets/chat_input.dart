@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:flutter/services.dart';
@@ -36,6 +37,8 @@ class _ChatInputState extends State<ChatInput> {
   final TypingStatusService _typingService = TypingStatusService();
   bool _isTyping = false;
   bool _isRecording = false;
+  Duration _recordDuration = Duration.zero;
+  Timer? _recordTimer;
   late AudioPlayer _audioPlayer;
   
   @override
@@ -59,13 +62,25 @@ class _ChatInputState extends State<ChatInput> {
     await Future.delayed(Duration.zero, () => HapticFeedback.heavyImpact());
     await _playSound('assets/sounds/record_start.mp3');
     if (widget.onVoiceRecordStart != null) widget.onVoiceRecordStart!();
+    // start duration timer
+    _recordDuration = Duration.zero;
+    _recordTimer?.cancel();
+    _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      setState(() => _recordDuration += const Duration(seconds:1));
+    });
   }
 
   Future<void> _stopRecording() async {
+    // Extra safeguard: Only stop if currently recording
+    if (!_isRecording) return;
     setState(() => _isRecording = false);
     await Future.delayed(Duration.zero, () => HapticFeedback.heavyImpact());
     await _playSound('assets/sounds/record_stop.mp3');
     if (widget.onVoiceRecordStop != null) widget.onVoiceRecordStop!();
+    // stop duration timer
+    _recordTimer?.cancel();
+    _recordDuration = Duration.zero;
+    setState(() {});
   }
 
   Future<void> _pickImage() async {
@@ -129,19 +144,25 @@ class _ChatInputState extends State<ChatInput> {
             ),
           ),
           hasText
+              // Only show send button when there is text. It must never trigger voice recording.
               ? IconButton(
                   icon: const Icon(Icons.send),
                   onPressed: () async {
-                    if (_controller.text.trim().isNotEmpty) {
+                    final trimmed = _controller.text.trim();
+                    print('ChatInput: send pressed: "$trimmed"');
+                    if (trimmed.isNotEmpty) {
                       await Future.delayed(Duration.zero, () => HapticFeedback.lightImpact());
-                      widget.onSendMessage(_controller.text.trim());
+                      widget.onSendMessage(trimmed);
                       _controller.clear();
                       setState(() {});
                     }
                   },
                 )
+              // Only show mic button when there is NO text. It must never trigger send message.
               : GestureDetector(
                   onTap: () async {
+                    print('ChatInput: mic tapped, _isRecording=$_isRecording');
+                    // Only allow recording logic if not currently sending text
                     if (!_isRecording) {
                       await _startRecording();
                     } else {
@@ -191,7 +212,7 @@ class _ChatInputState extends State<ChatInput> {
                             },
                           ),
                         Icon(
-                          _isRecording ? Icons.mic : Icons.mic_none,
+                          _isRecording ? Icons.stop : Icons.mic_none,
                           color: _isRecording ? Colors.red : null,
                           size: 28,
                         ),
@@ -199,6 +220,14 @@ class _ChatInputState extends State<ChatInput> {
                     ),
                   ),
                 ),
+          if (_isRecording)
+            Padding(
+              padding: const EdgeInsets.only(left:8.0),
+              child: Text(
+                '${_recordDuration.inMinutes.toString().padLeft(2,'0')}:${(_recordDuration.inSeconds%60).toString().padLeft(2,'0')}',
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
         ],
       ),
     );
